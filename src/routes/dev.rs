@@ -314,6 +314,36 @@ pub async fn requests_page(tenant: Tenant) -> Response {
     (StatusCode::OK, page(&tenant, "Requests", &body)).into_response()
 }
 
+/// Non-standard: the armed faults (see `crate::faults`).
+pub async fn api_faults(State(state): State<AppState>) -> Response {
+    (no_store(), Json(state.faults.list())).into_response()
+}
+
+/// Non-standard: arm a fault, e.g. `{"endpoint": "token", "error": "invalid_grant"}`.
+pub async fn api_faults_add(State(state): State<AppState>, Json(req): Json<crate::faults::FaultRequest>) -> Response {
+    match crate::faults::Fault::from_request(req) {
+        Ok(fault) => {
+            let fault = state.faults.add(fault);
+            tracing::info!("fault {} armed for {:?}", fault.id, fault.endpoint);
+            (StatusCode::CREATED, no_store(), Json(fault)).into_response()
+        }
+        Err(e) => OAuthError::invalid_request(e).into_response(),
+    }
+}
+
+pub async fn api_faults_remove(
+    State(state): State<AppState>,
+    axum::extract::Path(params): axum::extract::Path<HashMap<String, String>>,
+) -> Response {
+    let removed = params.get("id").and_then(|id| id.parse().ok()).is_some_and(|id| state.faults.remove(id));
+    if removed { StatusCode::NO_CONTENT.into_response() } else { StatusCode::NOT_FOUND.into_response() }
+}
+
+pub async fn api_faults_clear(State(state): State<AppState>) -> StatusCode {
+    state.faults.clear();
+    StatusCode::NO_CONTENT
+}
+
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
 }
@@ -322,6 +352,71 @@ pub async fn api_presets() -> impl IntoResponse {
 pub async fn api_users(State(state): State<AppState>, tenant: Tenant) -> impl IntoResponse {
     let fallback = tenant.default_preset(&state.config);
     Json(state.config.users.iter().map(|u| u.to_json(fallback)).collect::<Vec<_>>())
+}
+
+const FAULT_ENDPOINTS: &[&str] = &[
+    "token",
+    "authorize",
+    "userinfo",
+    "jwks",
+    "discovery",
+    "introspect",
+    "revoke",
+    "device_authorization",
+    "par",
+    "register",
+    "end_session",
+];
+const FAULT_ERRORS: &[&str] = &[
+    "server_error",
+    "temporarily_unavailable",
+    "invalid_grant",
+    "invalid_client",
+    "invalid_token",
+    "invalid_request",
+    "invalid_scope",
+    "unauthorized_client",
+    "access_denied",
+    "login_required",
+    "consent_required",
+    "interaction_required",
+];
+
+/// The armed faults as a list with remove buttons (the page script handles the clicks).
+fn fault_list(faults: &[crate::faults::Fault]) -> String {
+    if faults.is_empty() {
+        return r#"<p class="muted small">No faults armed.</p>"#.into();
+    }
+    let items: String = faults
+        .iter()
+        .map(|f| {
+            let endpoint = serde_json::to_value(f.endpoint).ok().map(|v| crate::util::value_to_string(&v)).unwrap_or_default();
+            let mut what = vec![match &f.error {
+                Some(e) if f.endpoint == crate::faults::Endpoint::Authorize => format!("<b>{}</b>", esc(e)),
+                Some(e) => format!("<b>{}</b> ({})", esc(e), f.status),
+                None => "no error".into(),
+            }];
+            if f.delay_ms > 0 {
+                what.push(format!("after {} ms", f.delay_ms));
+            }
+            for (label, value) in [("client", &f.client_id), ("grant", &f.grant_type), ("issuer", &f.issuer)] {
+                if let Some(v) = value {
+                    what.push(format!("{label} <code>{}</code>", esc(v)));
+                }
+            }
+            let left = match f.remaining {
+                Some(1) => "next request".to_string(),
+                Some(n) => format!("next {n} requests"),
+                None => "until removed".to_string(),
+            };
+            format!(
+                r#"<li><span><code>{endpoint}</code> → {what} · {left}</span><button class="btn small ghost" type="button" data-fault="{id}">Remove</button></li>"#,
+                what = what.join(" · "),
+                id = f.id,
+            )
+        })
+        .collect();
+    format!(r#"<ul class="fault-list">{items}</ul>"#)
 }
 
 pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers: HeaderMap) -> Response {
@@ -359,6 +454,24 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
     <button class="btn ghost" id="dev-clock-reset" type="button"{reset_disabled}>Reset to real time</button>
   </div>
 </section>
+<section class="card" id="faults">
+  <div class="eyebrow">Faults</div>
+  <p class="muted">Make the next matching requests fail on purpose, or respond slowly, to test your app's error handling. Authorization errors are redirected back to the client like real ones. Scripts can use <code>POST {faults_api}</code>.</p>
+  {fault_list}
+  <div class="opts faults-form">
+    <label>Endpoint<select id="dev-fault-endpoint">{endpoint_options}</select></label>
+    <label>Error<input id="dev-fault-error" list="dev-fault-errors" placeholder="server_error"></label>
+    <label>Client <small>optional</small><input id="dev-fault-client" placeholder="any client"></label>
+    <label>Delay (ms)<input id="dev-fault-delay" type="number" min="0" max="{max_delay}" value="0"></label>
+    <label>Times<input id="dev-fault-count" type="number" min="1" value="1"></label>
+    <div class="checks"><label class="check"><input type="checkbox" id="dev-fault-always"> Until removed</label></div>
+  </div>
+  <datalist id="dev-fault-errors">{error_options}</datalist>
+  <div class="actions">
+    <button class="btn" id="dev-fault-add" type="button">Arm fault</button>
+    <button class="btn ghost" id="dev-fault-clear" type="button"{clear_disabled}>Remove all</button>
+  </div>
+</section>
 <section class="card">
   <div class="eyebrow">Signing key</div>
   <p class="muted">Tokens are signed with key <code id="dev-kid">{kid}</code>. Rotating creates a new key; the previous {kept} stay in the JWKS so tokens already issued keep verifying. Scripts can use <code>POST {rotate}</code>.</p>
@@ -383,13 +496,25 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
         },
         clock_api = esc(&tenant.url("/dev/api/clock")),
         reset_disabled = if state.clock().offset() == 0 { " disabled" } else { "" },
+        faults_api = esc(&tenant.url("/dev/api/faults")),
+        fault_list = fault_list(&state.faults.list()),
+        endpoint_options =
+            FAULT_ENDPOINTS.iter().map(|e| format!(r#"<option value="{e}">{e}</option>"#)).collect::<String>(),
+        error_options = FAULT_ERRORS.iter().map(|e| format!(r#"<option value="{e}">"#)).collect::<String>(),
+        max_delay = crate::faults::MAX_DELAY_MS,
+        clear_disabled = if state.faults.is_empty() { " disabled" } else { "" },
         data = data_script(&editor_data(
             &state,
             &tenant,
             "dev",
             previous.as_ref(),
             None,
-            json!({ "api": api, "rotateApi": tenant.url("/dev/api/rotate-keys"), "clockApi": tenant.url("/dev/api/clock") }),
+            json!({
+                "api": api,
+                "rotateApi": tenant.url("/dev/api/rotate-keys"),
+                "clockApi": tenant.url("/dev/api/clock"),
+                "faultsApi": tenant.url("/dev/api/faults"),
+            }),
         )),
     );
     (StatusCode::OK, page(&tenant, "Token generator", &body)).into_response()

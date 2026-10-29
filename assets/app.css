@@ -58,11 +58,11 @@ a { color: var(--accent); }
   color: var(--cv); background: color-mix(in srgb, var(--cv) 14%, transparent); border: 1px solid color-mix(in srgb, var(--cv) 40%, transparent);
 }
 
-.clock-banner {
+.clock-banner, .faults-banner {
   padding: 8px 28px; font-size: 13px; text-align: center;
   background: color-mix(in srgb, var(--warn) 14%, var(--card)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
 }
-.clock-banner b { color: var(--warn); }
+.clock-banner b, .faults-banner b { color: var(--warn); }
 .clock-actions { align-items: center; }
 .clock-actions input { width: 120px; }
 main { max-width: 1240px; margin: 0 auto; padding: 28px; display: grid; gap: 20px; }
@@ -268,3 +268,12 @@ textarea { resize: vertical; min-height: 36px; }
 .req-empty { padding: 24px 0; text-align: center; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Faults */
+.fault-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; }
+.fault-list li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 12px; border-radius: 10px; background: var(--input); border: 1px solid var(--border);
+  border-left: 4px solid var(--warn); font-size: 13px;
+}
+.faults-form select { width: 100%; }

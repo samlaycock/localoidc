@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod config;
 pub mod error;
+pub mod faults;
 pub mod fetch;
 pub mod html;
 pub mod inspector;

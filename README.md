@@ -11,7 +11,7 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 - **Custom claims everywhere.** The login UI, the device flow, the token generator and the dev API all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
 - **Mint tokens without a login.** You can do it from a web page (`/dev`) or a JSON API (`/dev/api/token`).
 - **See why a request failed.** The request inspector at `/dev/requests` shows every request your app makes, what it sent and the exact reason anything was rejected.
-- **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Declared users](#declared-users) give a team and its CI the same named identities.
+- **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Fault injection](#injecting-faults) and a [shifted clock](#shifting-the-clock) cover the unhappy paths. [Declared users](#declared-users) give a team and its CI the same named identities.
 - **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans.
 
 > [!WARNING]
@@ -92,6 +92,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
+| Fault injection (non-standard) | `/dev/api/faults` (GET/POST/DELETE), `/dev/api/faults/{id}` (DELETE) |
 | Request inspector (non-standard) | `/dev/requests`, `/dev/api/requests` (GET/DELETE) |
 | Built-in test redirect target | `/callback` |
 | Health check | `/health` |
@@ -237,6 +238,35 @@ curl -s -X POST http://localhost:9400/dev/api/clock -H 'content-type: applicatio
 - The `/dev` page has the same controls. While the clock is shifted, every page shows a warning banner.
 - `--clock-offset <duration>` (`LOCALOIDC_CLOCK_OFFSET`) sets an offset at startup.
 - The offset isn't saved, so a restart always goes back to real time. Records that expire while the clock is ahead are purged within a minute. After that, moving the clock back doesn't restore them.
+
+### Injecting faults
+
+Make the next requests to an endpoint fail on purpose, or respond slowly, to test how your app handles an identity provider that misbehaves. This works on requests your app makes itself, so the app doesn't need to change anything.
+
+```sh
+# The app's next refresh fails with invalid_grant
+curl -s -X POST http://localhost:9400/dev/api/faults -H 'content-type: application/json' \
+  -d '{"endpoint": "token", "grant_type": "refresh_token", "error": "invalid_grant"}'
+
+# The JWKS endpoint answers 503 until the fault is removed
+curl -s -X POST http://localhost:9400/dev/api/faults -H 'content-type: application/json' \
+  -d '{"endpoint": "jwks", "error": "temporarily_unavailable", "always": true}'
+
+# The next login is denied
+curl -s -X POST http://localhost:9400/dev/api/faults -H 'content-type: application/json' \
+  -d '{"endpoint": "authorize", "error": "access_denied"}'
+
+curl -s -X DELETE http://localhost:9400/dev/api/faults   # remove them all
+```
+
+- `endpoint` is one of `authorize`, `token`, `userinfo`, `jwks`, `discovery`, `introspect`, `revoke`, `device_authorization`, `par`, `register` or `end_session`. Provider-specific paths count too, e.g. GitHub's `/login/oauth/access_token` is `token` and Keycloak's `.../certs` is `jwks`.
+- Narrow it with `issuer` (`root` or a preset id), `client_id` and `grant_type`.
+- `error` is the OAuth error to return (default `server_error`) with an optional `error_description`. `status` sets the HTTP status; by default it follows the error (401 for `invalid_client` and `invalid_token`, 500 for `server_error`, 503 for `temporarily_unavailable`, otherwise 400).
+- `delay_ms` (up to 30000) waits before answering. On its own, without an `error`, it just makes the request slow.
+- A fault affects the next matching request, or the next `count` of them, or every one with `always: true` until it's removed.
+- Authorization errors are redirected back to the client with `state` and the right response mode, like a real one. For a one-off, add `dev_error=<code>` (and optionally `dev_error_description`) to an `/authorize` request.
+- `GET /dev/api/faults` lists the armed faults and `DELETE /dev/api/faults/{id}` removes one. The `/dev` page has the same controls, and every page shows a warning banner while faults are armed. Injected responses carry an `x-localoidc-fault` header, and the [request inspector](#inspecting-requests) shows them with their description.
+- localoidc's own `/dev` tools are never affected. Faults live in memory, so a restart clears them.
 
 ## Inspecting requests
 

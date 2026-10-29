@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::clock::Clock;
 use crate::config::Config;
+use crate::faults::Faults;
 use crate::inspector::Inspector;
 use crate::keys::Keys;
 use crate::store::{Store, Table};
@@ -17,6 +18,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     /// Recent requests, for `/dev/requests`.
     pub inspector: Arc<Inspector>,
+    /// Armed faults, for `/dev/api/faults`.
+    pub faults: Arc<Faults>,
 }
 
 impl AppState {
@@ -28,7 +31,13 @@ impl AppState {
         for client in &config.clients {
             store.put(Table::Clients, &client.client_id, client, None);
         }
-        Ok(Self { config: Arc::new(config), keys, store: Arc::new(store), inspector: Arc::default() })
+        Ok(Self {
+            config: Arc::new(config),
+            keys,
+            store: Arc::new(store),
+            inspector: Arc::default(),
+            faults: Arc::default(),
+        })
     }
 
     /// The server's clock, shifted by the configured or API-set offset.

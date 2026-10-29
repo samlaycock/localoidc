@@ -402,6 +402,37 @@
     $('dev-clock-advance').addEventListener('click', () => shiftClock({ advance: amount() }));
     $('dev-clock-back').addEventListener('click', () => shiftClock({ advance: `-${amount()}` }));
     $('dev-clock-reset').addEventListener('click', () => shiftClock({ reset: true }));
+
+    // Faults: like the clock, every change reloads the page so the list and banner update.
+    const faultRequest = async (method, url, body) => {
+      try {
+        const res = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw new Error(json.error_description || res.statusText);
+        }
+        location.hash = 'faults';
+        location.reload();
+      } catch (err) {
+        alert(`Changing faults failed: ${err.message}`);
+      }
+    };
+    $('dev-fault-always').addEventListener('change', (e) => { $('dev-fault-count').disabled = e.target.checked; });
+    $('dev-fault-add').addEventListener('click', () => {
+      const body = { endpoint: $('dev-fault-endpoint').value };
+      const error = $('dev-fault-error').value.trim();
+      const client = $('dev-fault-client').value.trim();
+      const delay = Number($('dev-fault-delay').value) || 0;
+      if (error) body.error = error;
+      if (client) body.client_id = client;
+      if (delay) body.delay_ms = delay;
+      if ($('dev-fault-always').checked) body.always = true;
+      else body.count = Math.max(1, Number($('dev-fault-count').value) || 1);
+      faultRequest('POST', data.faultsApi, body);
+    });
+    $('dev-fault-clear').addEventListener('click', () => faultRequest('DELETE', data.faultsApi));
+    document.querySelectorAll('[data-fault]').forEach((btn) => btn.addEventListener('click', () =>
+      faultRequest('DELETE', `${data.faultsApi}/${btn.dataset.fault}`)));
     $('dev-generate').addEventListener('click', async () => {
       const { claims, access, errors } = build();
       if (errors.length) { refresh(); return; }
