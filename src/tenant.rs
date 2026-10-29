@@ -16,6 +16,8 @@ pub struct Tenant {
     pub prefix: String,
     /// The server clock's offset when the request arrived, so pages can warn about it.
     pub clock_offset: i64,
+    /// How many faults were armed when the request arrived, so pages can warn about them.
+    pub faults_armed: usize,
 }
 
 impl Tenant {
@@ -26,7 +28,7 @@ impl Tenant {
             None => base.to_string(),
         };
         let prefix = url::Url::parse(&issuer).map(|u| u.path().trim_end_matches('/').to_string()).unwrap_or_default();
-        Self { preset, issuer, prefix, clock_offset: 0 }
+        Self { preset, issuer, prefix, clock_offset: 0, faults_armed: 0 }
     }
 
     pub fn key(&self) -> &'static str {
@@ -85,6 +87,10 @@ impl FromRequestParts<AppState> for Tenant {
             }
             None => None,
         };
-        Ok(Tenant { clock_offset: state.clock().offset(), ..Tenant::new(&base, preset) })
+        Ok(Tenant {
+            clock_offset: state.clock().offset(),
+            faults_armed: state.faults.list().len(),
+            ..Tenant::new(&base, preset)
+        })
     }
 }

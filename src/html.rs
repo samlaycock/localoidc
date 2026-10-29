@@ -53,7 +53,7 @@ pub fn page(tenant: &Tenant, title: &str, body: &str) -> Html<String> {
 </body>
 </html>"#,
         title = esc(title),
-        clock = clock_banner(tenant),
+        clock = clock_banner(tenant) + &faults_banner(tenant),
     ))
 }
 
@@ -69,6 +69,19 @@ fn clock_banner(tenant: &Tenant) -> String {
     );
     format!(
         r#"<div class="clock-banner" role="status">The localoidc clock is <b>{offset}</b> {direction} real time. Token timestamps and expiry checks use the shifted time. <a href="{p}/dev#clock">Change or reset it</a></div>
+"#
+    )
+}
+
+fn faults_banner(tenant: &Tenant) -> String {
+    let n = tenant.faults_armed;
+    if n == 0 {
+        return String::new();
+    }
+    let p = &tenant.prefix;
+    let what = if n == 1 { "1 fault is".to_string() } else { format!("{n} faults are") };
+    format!(
+        r#"<div class="faults-banner" role="status"><b>{what} armed</b>: matching requests will fail or slow down on purpose. <a href="{p}/dev#faults">Manage faults</a></div>
 "#
     )
 }

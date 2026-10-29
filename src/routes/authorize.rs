@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use serde_json::{Map, Value, json};
 
 use crate::error::{OAuthError, no_store};
+use crate::faults;
 use crate::html::{data_script, error_page, esc, form_post, page};
 use crate::keys::{decode_header_unverified, decode_unverified, verify_rs256_with_jwks};
 use crate::presets;
@@ -311,6 +312,26 @@ pub async fn handle_authorize(
     };
 
     let default_preset = tenant.default_preset(&state.config);
+
+    // Non-standard: `dev_error` fails this request on purpose, and so do faults armed through
+    // `/dev/api/faults`. The error is redirected back to the client like a real one.
+    if let Some(error) = non_empty(&params, "dev_error") {
+        let description =
+            non_empty(&params, "dev_error_description").unwrap_or_else(|| "injected by localoidc (dev_error)".into());
+        return fail(&error, &description);
+    }
+    let target = faults::Target {
+        endpoint: faults::Endpoint::Authorize,
+        issuer: tenant.key(),
+        client_id: Some(&req.client_id),
+        grant_type: None,
+    };
+    if let Some(fault) = state.faults.take(&target) {
+        fault.wait().await;
+        if let Some(error) = &fault.error {
+            return fail(error, &fault.description());
+        }
+    }
 
     // Non-standard: `dev_user` (a declared user) and/or `dev_claims` (JSON or base64url JSON) sign
     // in immediately, for automated tests. `dev_claims` are merged over the user's claims.

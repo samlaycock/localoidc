@@ -23,7 +23,7 @@ use crate::util::{b64_std_decode, parse_form, value_to_string};
 /// How many requests are kept.
 pub const CAPACITY: usize = 500;
 /// The same limit axum applies to request bodies by default.
-const MAX_BODY: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_BODY: usize = 2 * 1024 * 1024;
 /// Larger request bodies are passed on but not parsed for the record.
 const MAX_RECORDED_BODY: usize = 64 * 1024;
 
@@ -149,7 +149,7 @@ fn ignored(path: &str) -> bool {
 }
 
 /// (`root` or the preset id, path within the issuer).
-fn strip_issuer(path: &str) -> (&str, &str) {
+pub(crate) fn strip_issuer(path: &str) -> (&str, &str) {
     match path.strip_prefix("/p/") {
         Some(rest) => match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
@@ -210,7 +210,7 @@ fn shorten(token: &str) -> String {
 }
 
 /// (what to show for the Authorization header, the client it identifies).
-fn describe_authorization(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+pub(crate) fn describe_authorization(headers: &HeaderMap) -> (Option<String>, Option<String>) {
     let Some(raw) = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()) else {
         return (None, None);
     };
@@ -241,12 +241,12 @@ fn describe_authorization(headers: &HeaderMap) -> (Option<String>, Option<String
     }
 }
 
-fn content_type(headers: &HeaderMap) -> String {
+pub(crate) fn content_type(headers: &HeaderMap) -> String {
     headers.get(header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).unwrap_or_default().to_ascii_lowercase()
 }
 
 /// Request parameters from the query and a form or JSON body.
-fn request_params(query: &str, content_type: &str, body: &[u8]) -> BTreeMap<String, String> {
+pub(crate) fn request_params(query: &str, content_type: &str, body: &[u8]) -> BTreeMap<String, String> {
     let mut params: BTreeMap<String, String> = parse_form(query.as_bytes()).into_iter().collect();
     if body.len() > MAX_RECORDED_BODY {
         params.insert("(body)".into(), format!("{} bytes, not recorded", body.len()));

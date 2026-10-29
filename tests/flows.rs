@@ -1264,3 +1264,97 @@ async fn inspector_records_requests_and_why_they_failed() {
     start_login(&app, "", "").await;
     assert_eq!(inspected(&app, "").await[0]["outcome"], "page: Sign in");
 }
+
+async fn arm(app: &Router, body: Value) -> Resp {
+    let req = Request::post("/dev/api/faults")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    send(app, req).await
+}
+
+#[tokio::test]
+async fn faults_fail_matching_requests() {
+    let app = app();
+    let cc = |client: &'static str| {
+        let app = app.clone();
+        async move { post_form(&app, "/token", &[("grant_type", "client_credentials"), ("client_id", client)]).await }
+    };
+
+    // Back-channel: the next two client_credentials requests from `svc` fail; others don't.
+    let res = arm(&app, json!({ "endpoint": "token", "client_id": "svc", "grant_type": "client_credentials", "error": "invalid_grant", "count": 2 })).await;
+    assert_eq!(res.status, StatusCode::CREATED);
+    let id = res.json()["id"].as_u64().unwrap();
+    assert_eq!(cc("other").await.status, StatusCode::OK);
+    for _ in 0..2 {
+        let res = cc("svc").await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST);
+        assert_eq!(res.headers["x-localoidc-fault"], id.to_string().as_str());
+        assert_eq!(res.json()["error_description"], format!("injected by localoidc (fault {id})"));
+    }
+    assert_eq!(cc("svc").await.status, StatusCode::OK);
+
+    // Provider aliases and issuer filters: Keycloak's userinfo fails until removed; root's doesn't.
+    let res =
+        arm(&app, json!({ "endpoint": "userinfo", "issuer": "keycloak", "error": "invalid_token", "always": true }))
+            .await;
+    let always = res.json()["id"].as_u64().unwrap();
+    let token = get(&app, "/p/keycloak/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {token}");
+    for _ in 0..2 {
+        let res = get_with(&app, "/p/keycloak/protocol/openid-connect/userinfo", &[("authorization", &bearer)]).await;
+        assert_eq!((res.status, res.json()["error"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_token")));
+    }
+    let root = get(&app, "/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string();
+    let res = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {root}"))]).await;
+    assert_eq!(res.status, StatusCode::OK);
+
+    // Defaults: a bare fault is a 500 server_error. A delay without an error just slows things down.
+    arm(&app, json!({ "endpoint": "jwks" })).await;
+    let res = get(&app, "/.well-known/jwks.json").await;
+    assert_eq!((res.status, res.json()["error"].as_str()), (StatusCode::INTERNAL_SERVER_ERROR, Some("server_error")));
+    arm(&app, json!({ "endpoint": "jwks", "delay_ms": 300 })).await;
+    let started = std::time::Instant::now();
+    assert_eq!(get(&app, "/jwks").await.status, StatusCode::OK);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+
+    // Authorization errors go back to the client, armed or per request with `dev_error`.
+    let auth = |extra: &str| {
+        format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&state=st{extra}", enc(CB))
+    };
+    arm(&app, json!({ "endpoint": "authorize", "error": "access_denied", "error_description": "nope" })).await;
+    let res = get(&app, &auth("&dev_claims=%7B%7D")).await;
+    let loc = res.location();
+    assert!(loc.as_str().starts_with(CB));
+    assert_eq!(
+        (query_param(&loc, "error"), query_param(&loc, "error_description"), query_param(&loc, "state")),
+        (Some("access_denied".into()), Some("nope".into()), Some("st".into()))
+    );
+    assert!(query_param(&get(&app, &auth("&dev_claims=%7B%7D")).await.location(), "code").is_some());
+    let res = get(&app, &auth("&dev_error=login_required")).await;
+    assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
+
+    // The inspector shows injected errors with their reason.
+    let latest = &get(&app, "/dev/api/requests?errors=true&limit=1").await.json()["entries"][0];
+    assert_eq!(
+        (&latest["error"], &latest["error_description"]),
+        (&json!("login_required"), &json!("injected by localoidc (dev_error)"))
+    );
+
+    // Listing, the banner, removing (also under a provider issuer) and validation.
+    let armed = get(&app, "/dev/api/faults").await.json();
+    assert_eq!(armed.as_array().unwrap().iter().map(|f| f["id"].as_u64().unwrap()).collect::<Vec<_>>(), [always]);
+    assert!(get(&app, "/dev").await.body.contains("1 fault is armed"));
+    let res =
+        send(&app, Request::delete(format!("/p/okta/dev/api/faults/{always}")).body(Body::empty()).unwrap()).await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    let res = send(&app, Request::delete(format!("/dev/api/faults/{always}")).body(Body::empty()).unwrap()).await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert!(!get(&app, "/dev").await.body.contains("faults-banner"));
+    arm(&app, json!({ "endpoint": "token", "always": true })).await;
+    let res = send(&app, Request::delete("/dev/api/faults").body(Body::empty()).unwrap()).await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    assert_eq!(get(&app, "/dev/api/faults").await.json(), json!([]));
+    assert_eq!(arm(&app, json!({ "endpoint": "token", "status": 200 })).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(arm(&app, json!({ "endpoint": "nope" })).await.status, StatusCode::UNPROCESSABLE_ENTITY);
+}

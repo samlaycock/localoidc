@@ -9,7 +9,7 @@ pub mod register;
 pub mod token;
 pub mod userinfo;
 
-use axum::routing::{any, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::{Router, middleware};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -44,6 +44,8 @@ fn issuer_routes() -> Router<AppState> {
         .route("/dev/api/clock", get(dev::api_clock).post(dev::api_clock_set))
         .route("/dev/requests", get(dev::requests_page))
         .route("/dev/api/requests", get(dev::api_requests).delete(dev::api_requests_clear))
+        .route("/dev/api/faults", get(dev::api_faults).post(dev::api_faults_add).delete(dev::api_faults_clear))
+        .route("/dev/api/faults/{id}", delete(dev::api_faults_remove))
 }
 
 pub fn router(state: AppState) -> Router {
@@ -53,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/app.css", get(pages::css))
         .route("/assets/app.js", get(pages::js))
         .route("/health", get(|| async { "ok" }))
+        .layer(middleware::from_fn_with_state(state.clone(), crate::faults::apply))
         .layer(middleware::from_fn_with_state(state.clone(), crate::inspector::record))
         .layer(CorsLayer::very_permissive())
         .layer(TraceLayer::new_for_http())
