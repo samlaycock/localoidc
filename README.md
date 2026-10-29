@@ -1,23 +1,75 @@
 # localoidc
 
-A local OpenID Connect / OAuth 2.0 provider for offline development and testing. It's a single Rust binary with no external services.
+[![CI](https://github.com/samlaycock/localoidc/actions/workflows/ci.yml/badge.svg)](https://github.com/samlaycock/localoidc/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/samlaycock/localoidc)](https://github.com/samlaycock/localoidc/releases)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-- **Claims editor instead of a password prompt.** At login you pick a provider to emulate and set exactly what goes into the tokens.
-- **Provider emulation.** It can emulate Google, GitHub, Microsoft Entra ID, Facebook, Apple, Auth0, Okta, Keycloak, GitLab, Discord and AWS Cognito. That covers their claim shapes, token formats and provider-specific endpoints such as GitHub's `/user` or Graph's `/me`.
+A local OpenID Connect / OAuth 2.0 provider for offline development and testing. It's a single Rust binary (or Docker image) with no external services, and it can pretend to be Google, GitHub, Microsoft Entra ID and eight other providers.
+
+- **A claims editor instead of a password prompt.** At login you pick a provider to emulate and set exactly what goes into the tokens.
+- **Provider emulation.** It reproduces the claim shapes, token formats and provider-specific endpoints of Google, GitHub, Microsoft Entra ID, Facebook, Apple, Auth0, Okta, Keycloak, GitLab, Discord and AWS Cognito, such as GitHub's `/user` or Graph's `/me`.
 - **Custom claims everywhere.** The login UI, the device flow, the token generator, the dev API and the CLI all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
 - **Mint tokens without a login.** You can do it from a web page (`/dev`), a JSON API (`/dev/api/token`) or the CLI (`localoidc token`).
+- **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Declared users](#declared-users) give a team and its CI the same named identities.
+- **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans.
 
-## Quick start
+> [!WARNING]
+> localoidc is for development and testing only. It accepts any client by default, lets anyone sign in or mint tokens as any identity, and serves unauthenticated endpoints for minting tokens and rotating keys. Never expose it to the internet or use it to protect real data.
+
+## Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Endpoints and protocol support](#endpoints-and-protocol-support)
+- [Provider emulation](#provider-emulation)
+- [Minting tokens for development and tests](#minting-tokens-for-development-and-tests)
+- [Configuration](#configuration)
+- [Conformance](#conformance)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Installation
+
+**Docker** (linux/amd64 and linux/arm64):
 
 ```sh
 docker run --rm -p 9400:9400 -v localoidc:/data ghcr.io/samlaycock/localoidc
-# or from source
-cargo run --release
 ```
 
-Both serve http://localhost:9400. The image is published for linux/amd64 and linux/arm64 with the tags `:<version>`, `:<major>.<minor>` (and `:<major>` from 1.0) and `:latest`. It runs as a non-root user and keeps its state in the `/data` volume.
+The image is tagged `:<version>`, `:<major>.<minor>` (and `:<major>` from 1.0) and `:latest`. It runs as a non-root user and keeps its state in the `/data` volume. Pass flags after the image name, e.g. `docker run … ghcr.io/samlaycock/localoidc --auto-login`.
 
-Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_secret` and `redirect_uri` is accepted unless you declare clients in `localoidc.toml`.
+**From source** (needs a recent stable Rust toolchain):
+
+```sh
+cargo install --git https://github.com/samlaycock/localoidc --locked
+localoidc
+```
+
+Or clone the repository and run `cargo run --release`.
+
+## Quick start
+
+Start localoidc with either command above. It serves http://localhost:9400.
+
+Point your app at the issuer `http://localhost:9400`. OIDC libraries read everything else from discovery (`/.well-known/openid-configuration`). With environment-based config, that typically looks like:
+
+```sh
+OIDC_ISSUER=http://localhost:9400
+OIDC_CLIENT_ID=my-app          # anything
+OIDC_CLIENT_SECRET=dev-secret  # anything
+```
+
+Any `client_id`, `client_secret` and `redirect_uri` is accepted unless you [declare clients](#configuration). When your app redirects to the login page, pick a provider, adjust the claims and sign in.
+
+To get a token without a browser:
+
+```sh
+curl -s 'http://localhost:9400/dev/api/token?email=me@example.com' | jq .
+```
+
+To make localoidc look like a specific provider, use that provider's issuer, for example `http://localhost:9400/p/google`. See [Provider emulation](#provider-emulation).
+
+## Endpoints and protocol support
 
 | What | Where |
 |---|---|
@@ -34,8 +86,10 @@ Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_s
 | Dynamic client registration (RFC 7591) | `/register` |
 | Token generator UI (non-standard) | `/dev` |
 | Token API (non-standard) | `/dev/api/token` |
+| Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Built-in test redirect target | `/callback` |
+| Health check | `/health` |
 
 ### Supported protocol features
 
@@ -53,7 +107,7 @@ Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_s
 - Reusing an authorization code revokes the tokens issued from it.
 - RP-initiated logout: registered clients must send a valid `id_token_hint` with a registered `post_logout_redirect_uri`, otherwise an error page is shown. Unregistered clients can redirect as long as they're identified by `client_id` or a hint.
 
-Not implemented: front-/back-channel logout, `check_session_iframe`, encrypted tokens and userinfo, unsigned ID tokens, pairwise subjects, and JARM.
+**Not implemented:** front- and back-channel logout, `check_session_iframe`, encrypted tokens and userinfo, unsigned ID tokens, pairwise subjects, JARM, and signing algorithms other than RS256.
 
 ### Which claims go where
 
@@ -65,16 +119,14 @@ Set `claims_by_scope = true` for spec-strict behaviour (OIDC Core 5.4):
 - Claims requested explicitly with the `claims` request parameter (OIDC Core 5.5) are released where they were asked for.
 - Non-standard claims such as `roles`, `groups` or your custom claims go only in the access token.
 
-### Conformance
-
-The [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite) can be run locally with `./conformance/run.sh`. See [`conformance/README.md`](conformance/README.md).
-
 ## Provider emulation
 
 There are two ways to use the presets:
 
 1. **Pick one at login.** On the root issuer, the login page has a provider picker that switches the claim template. Your choice is remembered in the session.
 2. **Use a provider issuer.** Every preset is also served as its own issuer at `/p/<preset>`, e.g. `http://localhost:9400/p/google`. It has its own discovery document and provider-specific endpoint aliases, so you can point SDKs that hard-code a provider's paths at it.
+
+To make a preset the default on the root issuer, use `--default-preset <id>`.
 
 | Preset | Notes | Extra endpoints under `/p/<preset>` |
 |---|---|---|
@@ -125,19 +177,6 @@ export TOKEN=$(localoidc token --format access -c email=me@example.com -c 'roles
 localoidc token --preset microsoft --audience api://orders --access-claim tenant=t1
 ```
 
-### Rotating the signing key
-
-`POST /dev/api/rotate-keys`, or the **Rotate signing key** button on `/dev`, generates a new signing key. It's useful for testing how your app handles JWKS changes.
-
-- The keyring is shared by all issuers.
-- New tokens are signed with the new key straight away.
-- The previous two keys stay in the JWKS, so tokens already issued keep verifying until a third rotation retires them.
-
-```sh
-curl -s -X POST http://localhost:9400/dev/api/rotate-keys
-# {"kid":"…new…","retired_kids":["…old…"],"jwks_uri":"http://localhost:9400/jwks"}
-```
-
 ### Declared users
 
 Declare named users in `localoidc.toml` so a team, its tests and CI all sign in as the same people:
@@ -168,30 +207,62 @@ access_claims = { permissions = ["orders:write"] }  # optional, access token onl
 - Alternatively, start the server with `--auto-login` so every authorization request signs in with the preset defaults. A `login_hint` sets the email or username, or picks a declared user.
 - The `password` and `client_credentials` grants accept `dev_claims` and `dev_access_claims` form parameters.
 
-## Configuration
+### Rotating the signing key
 
-Settings come from CLI flags, `LOCALOIDC_*` environment variables, or `localoidc.toml`. See [`localoidc.example.toml`](localoidc.example.toml) and `localoidc --help`.
+`POST /dev/api/rotate-keys`, or the **Rotate signing key** button on `/dev`, generates a new signing key. It's useful for testing how your app handles JWKS changes.
 
-- All state lives in `~/.localoidc/`: the current signing key in `signing-key.pem`, retired keys in `retired-keys/`, and everything else in the SQLite database `state.db`. That covers sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Each kind of record has its own table (`key`, JSON `value`, `expires_at`). Expired rows are purged every minute. Delete `state.db` to start fresh. If there's no data directory, an in-memory SQLite database is used.
-- In the Docker image the state lives in `/data` (`LOCALOIDC_DATA_DIR`), and the server binds `0.0.0.0` (`LOCALOIDC_HOST`). Pass flags after the image name, e.g. `docker run … ghcr.io/samlaycock/localoidc --auto-login`, and mount a config file with `-v ./localoidc.toml:/localoidc.toml -e LOCALOIDC_CONFIG=/localoidc.toml`.
-- If both a browser and other containers need to reach the server, set `--issuer` (`LOCALOIDC_ISSUER`) to a URL that works for both, or use `--dynamic-issuer`.
-
-## Development
+- The keyring is shared by all issuers.
+- New tokens are signed with the new key straight away.
+- The previous two keys stay in the JWKS, so tokens already issued keep verifying until a third rotation retires them.
 
 ```sh
-cargo test                       # integration tests for every flow
-cargo clippy --all-targets -- -D warnings
-cargo fmt
-docker build -t localoidc .      # the release image
+curl -s -X POST http://localhost:9400/dev/api/rotate-keys
+# {"kid":"…new…","retired_kids":["…old…"],"jwks_uri":"http://localhost:9400/jwks"}
 ```
 
-## Releases
+## Configuration
 
-Releases are managed with [changesets](https://github.com/changesets/changesets). `package.json` holds the version, and `npm run version` copies it into `Cargo.toml` and `Cargo.lock`.
+Settings come from CLI flags, `LOCALOIDC_*` environment variables, or a `localoidc.toml` in the working directory (or `--config <path>`). Flags and environment variables win over the file. See [`localoidc.example.toml`](localoidc.example.toml) for every setting and `localoidc --help` for the flags.
 
-1. Every pull request includes a changeset (`npm run changeset`, or `npm run changeset -- --empty` for changes users won't notice). CI checks for one.
-2. On `main`, the release workflow keeps a "Release <version>" pull request open. It applies the pending changesets: the version bump and `CHANGELOG.md`. CI runs on it, including a Docker build check.
-3. Merging that pull request does the release:
-   - builds the image natively for amd64 and arm64;
-   - pushes `ghcr.io/samlaycock/localoidc:<version>`, `:<major>.<minor>` (and `:<major>` from 1.0) and `:latest`;
-   - tags `v<version>` and creates the GitHub release from the changelog.
+Declared clients get their secret, redirect URIs and post-logout redirect URIs enforced. Other clients are accepted with anything, unless `strict_clients = true`:
+
+```toml
+[[clients]]
+client_id = "my-web-app"
+client_secret = "dev-secret"
+redirect_uris = ["http://localhost:3000/api/auth/callback"]
+post_logout_redirect_uris = ["http://localhost:3000/"]
+```
+
+Named identities go in `[[users]]`. See [Declared users](#declared-users).
+
+### State
+
+- All state lives in `~/.localoidc/` (`--data-dir`): the current signing key in `signing-key.pem`, retired keys in `retired-keys/`, and everything else in the SQLite database `state.db`.
+- The database holds sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Expired rows are purged every minute.
+- Delete `state.db` to start fresh. `--ephemeral-keys` generates a new signing key on every start. Without a data directory, an in-memory database is used.
+
+### Docker
+
+- In the image the state lives in `/data` (`LOCALOIDC_DATA_DIR`), and the server binds `0.0.0.0` (`LOCALOIDC_HOST`).
+- Mount a config file with `-v ./localoidc.toml:/localoidc.toml -e LOCALOIDC_CONFIG=/localoidc.toml`.
+- The issuer must be a URL your app can reach and that matches what the browser sees. If both a browser and other containers need to reach the server, set `--issuer` (`LOCALOIDC_ISSUER`) to a URL that works for both, or use `--dynamic-issuer` to derive the issuer from each request's `Host` header.
+
+## Conformance
+
+localoidc passes the [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite)'s Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans. The few expected skips are features that aren't implemented, such as unsigned ID tokens and pairwise subjects. To run the suite locally, use `./conformance/run.sh`. See [`conformance/README.md`](conformance/README.md).
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and release.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

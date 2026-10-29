@@ -2,6 +2,12 @@
 name = "localoidc"
 version = "0.1.0"
 edition = "2024"
+description = "A local OpenID Connect / OAuth 2.0 provider for offline development and testing"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/samlaycock/localoidc"
+readme = "README.md"
+keywords = ["oidc", "oauth2", "openid-connect", "testing", "identity-provider"]
+categories = ["development-tools::testing", "authentication"]
 
 [dependencies]
 anyhow = "1.0.104"
