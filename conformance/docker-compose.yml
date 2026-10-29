@@ -1,0 +1,64 @@
+# OpenID Foundation conformance suite + a TLS proxy in front of a localoidc
+# process running on the host. Driven by ./run.sh; see README.md.
+name: localoidc-conformance
+
+services:
+  mongodb:
+    image: mongo:6.0.13
+
+  server:
+    image: registry.gitlab.com/openid/conformance-suite:${SUITE_VERSION:?set SUITE_VERSION}
+    environment:
+      BASE_URL: https://localhost.emobix.co.uk:8443
+      BASE_MTLS_URL: https://localhost.emobix.co.uk:8444
+      MONGODB_HOST: mongodb
+      SPRING_PROFILES_ACTIVE: dev
+      OIDC_GOOGLE_CLIENTID: unused
+      OIDC_GOOGLE_SECRET: unused
+      OIDC_GITLAB_CLIENTID: unused
+      OIDC_GITLAB_SECRET: unused
+    depends_on: [mongodb]
+
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx:${SUITE_VERSION:?set SUITE_VERSION}
+    ports:
+      - "${SUITE_PORT:-8443}:8443"
+    networks:
+      default:
+        aliases:
+          # The suite's public hostname (public DNS -> 127.0.0.1); inside the network it must reach nginx.
+          - localhost.emobix.co.uk
+    depends_on: [server]
+
+  localoidc:
+    image: caddy:2
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      LOCALOIDC_UPSTREAM: ${LOCALOIDC_UPSTREAM:-host.docker.internal:9450}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases:
+          # Must contain a dot: Java only sends SNI for multi-label hostnames.
+          - localoidc.test
+
+  runner:
+    profiles: [runner]
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.13-alpine
+        RUN pip install --no-cache-dir httpx pyparsing
+    environment:
+      CONFORMANCE_SERVER: https://localhost.emobix.co.uk:8443/
+      CONFORMANCE_SERVER_MTLS: https://localhost.emobix.co.uk:8444/
+      CONFORMANCE_DEV_MODE: "1"
+      # Used by the patched runner (patch-runner.py) to rotate keys for oidcc-server-rotate-keys.
+      LOCALOIDC_ROTATE_KEYS_URL: https://localoidc.test/dev/api/rotate-keys
+    volumes:
+      - ./.suite/scripts:/suite/scripts:ro
+      - .:/work
+    working_dir: /work
+    entrypoint: ["python3", "/suite/scripts/run-test-plan.py"]

@@ -1,0 +1,11 @@
+[
+  {
+    "test-name": "oidcc-discovery-endpoint-verification",
+    "variant": "*",
+    "configuration-filename": "*",
+    "current-block": "",
+    "condition": "CheckForUnexpectedParametersInServerMetadata",
+    "expected-result": "warning",
+    "comment": "Discovery includes a non-standard `localoidc` object pointing at the dev token endpoints (extensions are allowed by RFC 8414)."
+  }
+]

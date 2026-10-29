@@ -1,0 +1,792 @@
+{
+  "alias": "localoidc",
+  "description": "localoidc - static clients (see conformance/localoidc.toml)",
+  "server": {
+    "discoveryUrl": "https://localoidc.test/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "conformance-client-1",
+    "client_secret": "conformance-secret-1"
+  },
+  "client2": {
+    "client_id": "conformance-client-2",
+    "client_secret": "conformance-secret-2"
+  },
+  "client_secret_post": {
+    "client_id": "conformance-client-post",
+    "client_secret": "conformance-secret-post"
+  },
+  "browser": [
+    {
+      "match": "https://localoidc.test/authorize*",
+      "tasks": [
+        {
+          "task": "Sign in",
+          "optional": true,
+          "match": "https://localoidc.test/authorize*",
+          "commands": [
+            [
+              "wait",
+              "xpath",
+              "//button[@value='approve']",
+              10
+            ],
+            [
+              "click",
+              "xpath",
+              "//button[@value='approve']"
+            ]
+          ]
+        },
+        {
+          "task": "Verify Complete",
+          "match": "*/test/*/callback*",
+          "commands": [
+            [
+              "wait",
+              "id",
+              "submission_complete",
+              10
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "match": "https://localoidc.test/end_session*",
+      "tasks": [
+        {
+          "task": "Verify Complete",
+          "match": "*/test/*/post*"
+        }
+      ]
+    }
+  ],
+  "override": {
+    "oidcc-prompt-login": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to",
+                  "update-image-placeholder-optional"
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/post*"
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-max-age-1": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to",
+                  "update-image-placeholder-optional"
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/post*"
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-ensure-registered-redirect-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect redirect_uri error page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-ensure-redirect-uri-in-authorization-request": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect redirect_uri error page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-redirect-uri-query-added": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect redirect_uri error page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-redirect-uri-query-mismatch": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect redirect_uri error page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-registration-logo-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect login page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-registration-policy-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect login page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-registration-tos-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Expect login page",
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Sign in to",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-bad-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect logout error page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-query-added-to-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect logout error page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-modified-id-token-hint": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect logout error page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-bad-id-token-hint": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect logout error page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-id-token-hint": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect logout error page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Error 400",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-params": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect signed-out page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Signed out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-no-post-logout-redirect-uri": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect signed-out page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Signed out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "oidcc-rp-initiated-logout-only-state": {
+      "browser": [
+        {
+          "match": "https://localoidc.test/authorize*",
+          "tasks": [
+            {
+              "task": "Sign in",
+              "optional": true,
+              "match": "https://localoidc.test/authorize*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//button[@value='approve']",
+                  10
+                ],
+                [
+                  "click",
+                  "xpath",
+                  "//button[@value='approve']"
+                ]
+              ]
+            },
+            {
+              "task": "Verify Complete",
+              "match": "*/test/*/callback*",
+              "commands": [
+                [
+                  "wait",
+                  "id",
+                  "submission_complete",
+                  10
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "match": "https://localoidc.test/end_session*",
+          "tasks": [
+            {
+              "task": "Expect signed-out page",
+              "match": "https://localoidc.test/end_session*",
+              "commands": [
+                [
+                  "wait",
+                  "xpath",
+                  "//*",
+                  10,
+                  "Signed out",
+                  "update-image-placeholder"
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

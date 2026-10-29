@@ -1,1 +1,4 @@
 /target
+/conformance/.suite
+/conformance/.data
+/conformance/results

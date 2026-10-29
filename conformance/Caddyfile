@@ -1,0 +1,10 @@
+# TLS front door so the suite sees localoidc at https://localoidc.test (the suite requires https).
+{
+	auto_https disable_redirects
+	skip_install_trust
+}
+
+https://localoidc.test {
+	tls internal
+	reverse_proxy {$LOCALOIDC_UPSTREAM:host.docker.internal:9450}
+}
