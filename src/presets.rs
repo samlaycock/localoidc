@@ -92,6 +92,20 @@ impl Preset {
         claims.insert("sub".into(), Value::String(derived));
     }
 
+    /// Merge `overrides` (a `null` removes a claim) and make sure there's a `sub`. On presets that
+    /// derive `sub` from another claim (GitHub's `id`, ...), overriding that claim without also
+    /// setting `sub` re-derives `sub` from the new value.
+    pub fn apply_overrides(&self, claims: &mut Map<String, Value>, overrides: &Map<String, Value>) {
+        if let Some(key) = self.sub_from
+            && overrides.contains_key(key)
+            && !overrides.contains_key("sub")
+        {
+            claims.remove("sub");
+        }
+        crate::util::merge_claims(claims, overrides);
+        self.ensure_sub(claims);
+    }
+
     /// Apply a `login_hint` to a claim set: emails go to `email`, anything else to a username-ish claim.
     pub fn apply_login_hint(&self, claims: &mut Map<String, Value>, hint: &str) {
         if hint.is_empty() {

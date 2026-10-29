@@ -345,7 +345,7 @@ async fn dev_api_get_and_post() {
 #[tokio::test]
 async fn github_emulation() {
     let app = app();
-    let res = get(&app, "/p/github/dev/api/token?login=octo").await.json();
+    let res = get(&app, "/p/github/dev/api/token?scope=openid&login=octo").await.json();
     let at = res["access_token"].as_str().unwrap();
     assert!(at.starts_with("gho_"));
     let user = get_with(&app, "/p/github/user", &[("authorization", &format!("token {at}"))]).await.json();
@@ -574,8 +574,10 @@ async fn state_survives_restart() {
     let unused_code = query_param(&login.location(), "code").unwrap();
     let revoked = get(&app, "/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string();
     post_form(&app, "/revoke", &[("token", &revoked)]).await;
-    let gho =
-        get(&app, "/p/github/dev/api/token?login=octo").await.json()["access_token"].as_str().unwrap().to_string();
+    let gho = get(&app, "/p/github/dev/api/token?scope=openid&login=octo").await.json()["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let reg = Request::post("/register")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(json!({ "redirect_uris": [CB] }).to_string()))
@@ -1032,4 +1034,47 @@ claims = { email = "alice@acme.dev", groups = ["admins"] }
     assert!(load("[[users]]\nid = \"a\"\n[[users]]\nid = \"a\"\n").is_err());
     assert!(load("[[users]]\nid = \"a\"\npreset = \"nope\"\n").is_err());
     assert!(load("[[users]]\nid = \"a\"\nemail = \"oops\"\n").is_err());
+}
+
+#[tokio::test]
+async fn overriding_the_sub_from_claim_rederives_sub() {
+    let app = app();
+    // Dev API, on presets whose `sub` comes from `id` (numeric and string ids).
+    let res = get(&app, "/p/github/dev/api/token?scope=openid&id=42").await.json();
+    assert_eq!((&res["id_token_claims"]["id"], &res["id_token_claims"]["sub"]), (&json!(42), &json!("42")));
+    let res = get(&app, "/p/discord/dev/api/token?scope=openid&id=99887766").await.json();
+    assert_eq!(res["id_token_claims"]["sub"], "99887766");
+    // An explicit `sub` still wins, and leaving `id` alone keeps the default.
+    let res = get(&app, "/p/github/dev/api/token?scope=openid&id=42&sub=custom").await.json();
+    assert_eq!(res["id_token_claims"]["sub"], "custom");
+    let res = get(&app, "/p/github/dev/api/token?scope=openid&name=Jo").await.json();
+    assert_eq!(res["id_token_claims"]["sub"], "1234567");
+
+    // dev_claims on /authorize.
+    let res = get(
+        &app,
+        &format!("/authorize?client_id=spa&redirect_uri={}&response_type=id_token&scope=openid&nonce=n&dev_preset=github&dev_claims={}", enc(CB), enc(r#"{"id":7}"#)),
+    )
+    .await;
+    let frag: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(res.location().fragment().unwrap().as_bytes()).into_owned().collect();
+    assert_eq!(claims(&frag["id_token"])["sub"], "7");
+
+    // dev_claims on the password grant.
+    let res = post_form(
+        &app,
+        "/token",
+        &[
+            ("grant_type", "password"),
+            ("username", "jo"),
+            ("password", "x"),
+            ("client_id", "cli"),
+            ("scope", "openid"),
+            ("dev_preset", "github"),
+            ("dev_claims", r#"{"id":8}"#),
+        ],
+    )
+    .await
+    .json();
+    assert_eq!(claims(res["id_token"].as_str().unwrap())["sub"], "8");
 }
