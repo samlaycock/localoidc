@@ -1,6 +1,6 @@
 [package]
 name = "localoidc"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 
 [dependencies]
@@ -33,3 +33,6 @@ uuid = { version = "1.29.0", features = ["v4"] }
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
+
+[profile.release]
+strip = "symbols"

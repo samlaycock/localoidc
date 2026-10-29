@@ -10,8 +10,12 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 ## Quick start
 
 ```sh
-cargo run --release            # http://localhost:9400
+docker run --rm -p 9400:9400 -v localoidc:/data ghcr.io/samlaycock/localoidc
+# or from source
+cargo run --release
 ```
+
+Both serve http://localhost:9400. The image is published for linux/amd64 and linux/arm64 with the tags `:<version>`, `:<major>.<minor>` (and `:<major>` from 1.0) and `:latest`. It runs as a non-root user and keeps its state in the `/data` volume.
 
 Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_secret` and `redirect_uri` is accepted unless you declare clients in `localoidc.toml`.
 
@@ -145,15 +149,25 @@ curl -s -X POST http://localhost:9400/dev/api/rotate-keys
 Settings come from CLI flags, `LOCALOIDC_*` environment variables, or `localoidc.toml`. See [`localoidc.example.toml`](localoidc.example.toml) and `localoidc --help`.
 
 - All state lives in `~/.localoidc/`: the current signing key in `signing-key.pem`, retired keys in `retired-keys/`, and everything else in the SQLite database `state.db`. That covers sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Each kind of record has its own table (`key`, JSON `value`, `expires_at`). Expired rows are purged every minute. Delete `state.db` to start fresh. If there's no data directory, an in-memory SQLite database is used.
-- When running in Docker with both browser and backend access, set `--issuer` to a URL both can reach, or use `--dynamic-issuer`.
-
-```sh
-docker build -t localoidc . && docker run -p 9400:9400 -v localoidc:/data localoidc
-```
+- In the Docker image the state lives in `/data` (`LOCALOIDC_DATA_DIR`), and the server binds `0.0.0.0` (`LOCALOIDC_HOST`). Pass flags after the image name, e.g. `docker run … ghcr.io/samlaycock/localoidc --auto-login`, and mount a config file with `-v ./localoidc.toml:/localoidc.toml -e LOCALOIDC_CONFIG=/localoidc.toml`.
+- If both a browser and other containers need to reach the server, set `--issuer` (`LOCALOIDC_ISSUER`) to a URL that works for both, or use `--dynamic-issuer`.
 
 ## Development
 
 ```sh
-cargo test     # integration tests for every flow
-cargo clippy --all-targets
+cargo test                       # integration tests for every flow
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+docker build -t localoidc .      # the release image
 ```
+
+## Releases
+
+Releases are managed with [changesets](https://github.com/changesets/changesets). `package.json` holds the version, and `npm run version` copies it into `Cargo.toml` and `Cargo.lock`.
+
+1. Every pull request includes a changeset (`npm run changeset`, or `npm run changeset -- --empty` for changes users won't notice). CI checks for one.
+2. On `main`, the release workflow keeps a "Release <version>" pull request open. It applies the pending changesets: the version bump and `CHANGELOG.md`. CI runs on it, including a Docker build check.
+3. Merging that pull request does the release:
+   - builds the image natively for amd64 and arm64;
+   - pushes `ghcr.io/samlaycock/localoidc:<version>`, `:<major>.<minor>` (and `:<major>` from 1.0) and `:latest`;
+   - tags `v<version>` and creates the GitHub release from the changelog.
