@@ -1,5 +1,5 @@
-//! Users declared in `localoidc.toml`: named identities shared by the login UI, the dev API,
-//! the CLI and automated logins.
+//! Users declared in `localoidc.toml`: named identities shared by the login UI, the dev API
+//! and automated logins.
 
 use rsa::sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use crate::util::merge_claims;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct User {
-    /// Handle used by `dev_user`, `--user` and the dev API's `user`.
+    /// Handle used by `dev_user` and the dev API's `user`.
     pub id: String,
     /// Shown in the login UI's picker (defaults to the user's email/name).
     #[serde(default, skip_serializing_if = "Option::is_none")]

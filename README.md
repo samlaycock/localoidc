@@ -8,8 +8,8 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 
 - **A claims editor instead of a password prompt.** At login you pick a provider to emulate and set exactly what goes into the tokens.
 - **Provider emulation.** It reproduces the claim shapes, token formats and provider-specific endpoints of Google, GitHub, Microsoft Entra ID, Facebook, Apple, Auth0, Okta, Keycloak, GitLab, Discord and AWS Cognito, such as GitHub's `/user` or Graph's `/me`.
-- **Custom claims everywhere.** The login UI, the device flow, the token generator, the dev API and the CLI all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
-- **Mint tokens without a login.** You can do it from a web page (`/dev`), a JSON API (`/dev/api/token`) or the CLI (`localoidc token`).
+- **Custom claims everywhere.** The login UI, the device flow, the token generator and the dev API all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
+- **Mint tokens without a login.** You can do it from a web page (`/dev`) or a JSON API (`/dev/api/token`).
 - **See why a request failed.** The request inspector at `/dev/requests` shows every request your app makes, what it sent and the exact reason anything was rejected.
 - **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Declared users](#declared-users) give a team and its CI the same named identities.
 - **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans.
@@ -88,6 +88,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Dynamic client registration (RFC 7591) | `/register` |
 | Token generator UI (non-standard) | `/dev` |
 | Token API (non-standard) | `/dev/api/token` |
+| Provider presets (non-standard) | `/dev/api/presets` |
 | Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
@@ -147,7 +148,7 @@ To make a preset the default on the root issuer, use `--default-preset <id>`.
 | `discord` | Snowflake ids | `/oauth2/authorize`, `/api/oauth2/token`, `/api/users/@me` |
 | `cognito` | `cognito:username`, `cognito:groups`, `token_use` | `/oauth2/authorize`, `/oauth2/token`, `/oauth2/userInfo` |
 
-`localoidc presets` lists all the presets.
+`GET /dev/api/presets` lists all the presets.
 
 ## Minting tokens for development and tests
 
@@ -174,20 +175,13 @@ curl -s -X POST http://localhost:9400/dev/api/token -H 'content-type: applicatio
 
 The response is a normal token response plus `id_token_claims`, `access_token_claims` and `issuer`. Other options are `defaults: false` (start from an empty claim set), `id_token: false` and `nonce`.
 
-**CLI:** this uses the same signing key and database, so the server doesn't need to be running.
-
-```sh
-export TOKEN=$(localoidc token --format access -c email=me@example.com -c 'roles=["admin"]')
-localoidc token --preset microsoft --audience api://orders --access-claim tenant=t1
-```
-
 ### Declared users
 
 Declare named users in `localoidc.toml` so a team, its tests and CI all sign in as the same people:
 
 ```toml
 [[users]]
-id = "alice"                  # used by dev_user, --user and the dev API
+id = "alice"                  # used by dev_user and the dev API
 label = "Alice (admin)"       # optional, shown on the login page
 preset = "google"             # optional, otherwise the issuer's default preset
 claims = { email = "alice@acme.dev", roles = ["admin"] }
@@ -202,7 +196,6 @@ access_claims = { permissions = ["orders:write"] }  # optional, access token onl
 - With `--auto-login`, a `login_hint` matching a user's `id` or `email` signs in as that user.
 - The `password` grant resolves `username` the same way.
 - `POST /dev/api/token` accepts `"user": "alice"` (or `?user=alice` on GET), with `claims` and `access_token_claims` merged on top. `GET /dev/api/users` lists the users as the issuer would issue them.
-- On the CLI, `localoidc token --user alice` mints tokens for a user, and `localoidc users` lists them.
 
 ### Automating browser logins (Playwright, Cypress, …)
 
@@ -242,7 +235,7 @@ curl -s -X POST http://localhost:9400/dev/api/clock -H 'content-type: applicatio
 
 - `POST /dev/api/clock` takes exactly one of `offset` (set it), `advance` (move it; negative moves back) or `reset: true`. Durations are seconds or text such as `90s`, `15m`, `2h`, `31d` or `1d12h`. `GET /dev/api/clock` shows the current state.
 - The `/dev` page has the same controls. While the clock is shifted, every page shows a warning banner.
-- `--clock-offset <duration>` (`LOCALOIDC_CLOCK_OFFSET`) sets an offset at startup. It also applies to `localoidc token`, which doesn't see offsets set on a running server through the API.
+- `--clock-offset <duration>` (`LOCALOIDC_CLOCK_OFFSET`) sets an offset at startup.
 - The offset isn't saved, so a restart always goes back to real time. Records that expire while the clock is ahead are purged within a minute. After that, moving the clock back doesn't restore them.
 
 ## Inspecting requests

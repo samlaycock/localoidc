@@ -2,41 +2,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use serde_json::{Map, Value};
 use tracing_subscriber::EnvFilter;
 
-use localoidc::config::{Cli, Command, Config, TokenArgs, TokenFormat};
-use localoidc::routes::dev::{DevTokenRequest, OneOrMany, mint};
-use localoidc::tenant::Tenant;
+use localoidc::config::{Cli, Config};
 use localoidc::{AppState, load_keys, presets, router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
-        Some(Command::Token(args)) => token(&cli.server, *args),
-        Some(Command::Presets) => {
-            for p in presets::all() {
-                println!("{:<10} {:<20} {:<7} {}", p.id, p.name, p.protocol, p.description);
-            }
-            Ok(())
-        }
-        Some(Command::Users) => {
-            let config = Config::load(&cli.server)?;
-            let fallback = presets::get_or_generic(&config.default_preset);
-            for user in &config.users {
-                let (preset, claims, _) = user.resolve(None, fallback);
-                let who = ["email", "name", "preferred_username", "login", "username"]
-                    .iter()
-                    .find_map(|k| claims.get(*k).and_then(Value::as_str))
-                    .unwrap_or_default();
-                let sub = claims.get("sub").and_then(Value::as_str).unwrap_or_default();
-                println!("{:<16} {:<10} {:<32} {}", user.id, preset.id, who, sub);
-            }
-            Ok(())
-        }
-        Some(Command::Serve) | None => serve(&cli.server).await,
-    }
+    serve(&Cli::parse().server).await
 }
 
 async fn serve(args: &localoidc::config::ServerArgs) -> anyhow::Result<()> {
@@ -77,55 +50,5 @@ async fn serve(args: &localoidc::config::ServerArgs) -> anyhow::Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
-    Ok(())
-}
-
-fn parse_pairs(pairs: &[String]) -> anyhow::Result<Map<String, Value>> {
-    let mut map = Map::new();
-    for pair in pairs {
-        let (k, v) = pair.split_once('=').with_context(|| format!("expected KEY=VALUE, got '{pair}'"))?;
-        let value = match serde_json::from_str::<Value>(v) {
-            Ok(parsed) if k != "sub" => parsed,
-            _ => Value::String(v.to_string()),
-        };
-        map.insert(k.to_string(), value);
-    }
-    Ok(map)
-}
-
-fn token(server: &localoidc::config::ServerArgs, args: TokenArgs) -> anyhow::Result<()> {
-    let config = Config::load(server)?;
-    let keys = load_keys(&config)?;
-    let tenant_preset = match &args.tenant {
-        Some(id) => Some(presets::get(id).with_context(|| format!("unknown preset '{id}'"))?),
-        None => None,
-    };
-    let tenant = Tenant::new(&config.issuer, tenant_preset);
-    let state = AppState::new(config, keys)?;
-
-    let mut claims = match &args.claims_json {
-        Some(raw) => localoidc::util::parse_claims_object(raw).map_err(anyhow::Error::msg)?,
-        None => Map::new(),
-    };
-    claims.extend(parse_pairs(&args.claims)?);
-    let req = DevTokenRequest {
-        user: args.user,
-        preset: args.preset.or(args.tenant),
-        client_id: Some(args.client_id),
-        audience: (!args.audience.is_empty()).then_some(OneOrMany::Many(args.audience)),
-        scope: args.scope,
-        claims,
-        access_token_claims: parse_pairs(&args.access_claims)?,
-        expires_in: args.expires_in,
-        ..Default::default()
-    };
-    let out = mint(&state, &tenant, req).map_err(|e| anyhow::anyhow!("{}: {}", e.error, e.description))?;
-    let field = |k: &str| out.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-    match args.format {
-        TokenFormat::Json => println!("{}", serde_json::to_string_pretty(&out)?),
-        TokenFormat::Access => println!("{}", field("access_token")),
-        TokenFormat::Id => println!("{}", field("id_token")),
-        TokenFormat::Refresh => println!("{}", field("refresh_token")),
-    }
     Ok(())
 }

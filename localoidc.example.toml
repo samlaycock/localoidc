@@ -27,7 +27,7 @@ client_name = "My Web App"
 redirect_uris = ["http://localhost:3000/api/auth/callback"]
 post_logout_redirect_uris = ["http://localhost:3000/"]
 
-# Named users for the login page, dev_user=<id>, the dev API ("user") and `localoidc token --user`.
+# Named users for the login page, dev_user=<id> and the dev API ("user").
 # Claims are merged over the preset defaults; each user gets a stable provider-shaped `sub`.
 [[users]]
 id = "alice"

@@ -77,7 +77,7 @@ impl Store {
                     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
                 }
                 let conn = Connection::open(p).with_context(|| format!("opening {}", p.display()))?;
-                // WAL lets the `localoidc token` CLI write while the server is running.
+                // WAL lets readers and the writer work concurrently.
                 conn.pragma_update(None, "journal_mode", "WAL")?;
                 conn
             }

@@ -1,119 +1,65 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, ValueEnum};
 use serde::Deserialize;
 
 use crate::state::Client;
 use crate::users::User;
 
+/// The binary only runs the server; everything else happens over HTTP (the UI and `/dev/api`).
 #[derive(Parser, Debug)]
 #[command(name = "localoidc", version, about = "A local OpenID Connect / OAuth 2.0 provider for offline development")]
 pub struct Cli {
-    #[command(subcommand)]
-    pub command: Option<Command>,
     #[command(flatten)]
     pub server: ServerArgs,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum Command {
-    /// Run the server (default).
-    Serve,
-    /// Mint tokens directly from the command line, signed with the server's persisted key.
-    Token(Box<TokenArgs>),
-    /// List the available provider presets.
-    Presets,
-    /// List the users declared in the config file.
-    Users,
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct ServerArgs {
     /// Path to a TOML config file (defaults to ./localoidc.toml if present).
-    #[arg(long, env = "LOCALOIDC_CONFIG", global = true)]
+    #[arg(long, env = "LOCALOIDC_CONFIG")]
     pub config: Option<PathBuf>,
     /// Interface to bind.
-    #[arg(long, env = "LOCALOIDC_HOST", global = true)]
+    #[arg(long, env = "LOCALOIDC_HOST")]
     pub host: Option<String>,
     /// Port to listen on.
-    #[arg(long, short, env = "LOCALOIDC_PORT", global = true)]
+    #[arg(long, short, env = "LOCALOIDC_PORT")]
     pub port: Option<u16>,
     /// Public issuer URL (default http://localhost:<port>).
-    #[arg(long, env = "LOCALOIDC_ISSUER", global = true)]
+    #[arg(long, env = "LOCALOIDC_ISSUER")]
     pub issuer: Option<String>,
     /// Derive the issuer from each request's Host header instead of a fixed URL.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub dynamic_issuer: bool,
     /// Skip the login UI and sign in immediately with preset defaults.
-    #[arg(long, env = "LOCALOIDC_AUTO_LOGIN", global = true)]
+    #[arg(long, env = "LOCALOIDC_AUTO_LOGIN")]
     pub auto_login: bool,
     /// Only accept clients declared in the config file or registered dynamically.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub strict_clients: bool,
     /// Provider preset used on the root issuer (generic, google, github, ...).
-    #[arg(long, env = "LOCALOIDC_DEFAULT_PRESET", global = true)]
+    #[arg(long, env = "LOCALOIDC_DEFAULT_PRESET")]
     pub default_preset: Option<String>,
     /// Directory where the signing key is persisted (default ~/.localoidc).
-    #[arg(long, env = "LOCALOIDC_DATA_DIR", global = true)]
+    #[arg(long, env = "LOCALOIDC_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
     /// Generate a throwaway signing key on every start.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub ephemeral_keys: bool,
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub access_token_ttl: Option<i64>,
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub id_token_ttl: Option<i64>,
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub refresh_token_ttl: Option<i64>,
     /// When to issue refresh tokens.
-    #[arg(long, value_enum, global = true)]
+    #[arg(long, value_enum)]
     pub refresh_tokens: Option<RefreshPolicy>,
     /// Run the clock ahead (or, if negative, behind) real time, e.g. 31d, -5m, 3600. Shifts token
     /// timestamps and every expiry check. Can be changed at runtime with /dev/api/clock.
-    #[arg(long, env = "LOCALOIDC_CLOCK_OFFSET", global = true, allow_hyphen_values = true, value_parser = crate::util::parse_duration)]
+    #[arg(long, env = "LOCALOIDC_CLOCK_OFFSET", allow_hyphen_values = true, value_parser = crate::util::parse_duration)]
     pub clock_offset: Option<i64>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct TokenArgs {
-    /// Declared user (from `[[users]]` in the config file) to mint tokens for.
-    #[arg(long)]
-    pub user: Option<String>,
-    /// Provider preset whose default claims are used.
-    #[arg(long)]
-    pub preset: Option<String>,
-    /// Issue from a preset tenant issuer (/p/<preset>) instead of the root issuer.
-    #[arg(long)]
-    pub tenant: Option<String>,
-    #[arg(long, default_value = "localoidc-dev")]
-    pub client_id: String,
-    #[arg(long)]
-    pub scope: Option<String>,
-    #[arg(long)]
-    pub audience: Vec<String>,
-    /// Claim override, KEY=VALUE (VALUE parsed as JSON when possible). Repeatable.
-    #[arg(long = "claim", short = 'c')]
-    pub claims: Vec<String>,
-    /// Claims JSON object merged over the preset defaults.
-    #[arg(long = "claims")]
-    pub claims_json: Option<String>,
-    /// Access-token-only claim, KEY=VALUE. Repeatable.
-    #[arg(long = "access-claim")]
-    pub access_claims: Vec<String>,
-    #[arg(long)]
-    pub expires_in: Option<i64>,
-    /// What to print.
-    #[arg(long, value_enum, default_value = "json")]
-    pub format: TokenFormat,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenFormat {
-    Json,
-    Access,
-    Id,
-    Refresh,
 }
 
 #[derive(ValueEnum, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
