@@ -2,3 +2,4 @@
 /conformance/.suite
 /conformance/.data
 /conformance/results
+/node_modules
