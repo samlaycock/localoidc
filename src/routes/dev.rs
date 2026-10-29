@@ -259,6 +259,61 @@ pub async fn api_clock_set(State(state): State<AppState>, Json(req): Json<ClockR
     (no_store(), Json(clock_json(&state))).into_response()
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct RequestsQuery {
+    pub client_id: Option<String>,
+    pub errors: Option<bool>,
+    pub after: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+/// Non-standard: recent requests to every issuer, newest first (see `crate::inspector`).
+pub async fn api_requests(State(state): State<AppState>, Query(q): Query<RequestsQuery>) -> Response {
+    let filter = crate::inspector::Filter {
+        client_id: q.client_id.filter(|c| !c.is_empty()),
+        errors_only: q.errors.unwrap_or(false),
+        after: q.after,
+        limit: q.limit,
+    };
+    let body = json!({
+        "entries": state.inspector.list(&filter),
+        // Lets a poller notice a restart: ids start again from 1.
+        "latest_id": state.inspector.latest_id(),
+        "capacity": crate::inspector::CAPACITY,
+    });
+    (no_store(), Json(body)).into_response()
+}
+
+pub async fn api_requests_clear(State(state): State<AppState>) -> StatusCode {
+    state.inspector.clear();
+    StatusCode::NO_CONTENT
+}
+
+pub async fn requests_page(tenant: Tenant) -> Response {
+    let api = tenant.url("/dev/api/requests");
+    let body = format!(
+        r#"<section class="card">
+  <div class="eyebrow">Request inspector</div>
+  <h1>Requests</h1>
+  <p class="muted">The last {capacity} requests to every issuer, newest first. Click one for its parameters and, if it failed, why. Secrets are masked and tokens shortened. Tests can read the same list from <code>GET {api}</code>.</p>
+  <div class="req-toolbar">
+    <input id="req-client" placeholder="Filter by client_id" aria-label="Filter by client_id">
+    <label class="check"><input type="checkbox" id="req-errors"> Errors only</label>
+    <label class="check"><input type="checkbox" id="req-all"> Show discovery, JWKS and dev tools</label>
+    <span class="req-spacer"></span>
+    <button class="btn small" id="req-pause" type="button">Pause</button>
+    <button class="btn small ghost" id="req-clear" type="button">Clear</button>
+  </div>
+  <div id="lo-requests" data-api="{api}" data-issuer="{issuer}"></div>
+</section>"#,
+        capacity = crate::inspector::CAPACITY,
+        api = esc(&api),
+        issuer = esc(&tenant.issuer),
+    );
+    (StatusCode::OK, page(&tenant, "Requests", &body)).into_response()
+}
+
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
 }

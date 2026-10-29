@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod fetch;
 pub mod html;
+pub mod inspector;
 pub mod keys;
 pub mod presets;
 pub mod routes;

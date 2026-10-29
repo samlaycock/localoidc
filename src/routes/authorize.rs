@@ -67,7 +67,10 @@ pub fn clear_session_cookie(tenant: &Tenant) -> String {
 
 fn deliver(redirect_uri: &str, mode: &str, params: Vec<(String, String)>) -> Response {
     if mode == "form_post" {
-        return form_post(redirect_uri, &params).into_response();
+        let keys = params.iter().map(|(k, _)| k.clone()).collect();
+        let mut resp = form_post(redirect_uri, &params).into_response();
+        resp.extensions_mut().insert(crate::inspector::FormPostNote(keys));
+        return resp;
     }
     let Ok(mut url) = url::Url::parse(redirect_uri) else {
         return (StatusCode::BAD_REQUEST, "invalid redirect_uri").into_response();
@@ -95,7 +98,9 @@ fn redirect_error(
         params.push(("state".into(), s.into()));
     }
     params.push(("iss".into(), tenant.issuer.clone()));
-    deliver(redirect_uri, mode, params)
+    let mut resp = deliver(redirect_uri, mode, params);
+    crate::inspector::ErrorNote::attach(&mut resp, error, description);
+    resp
 }
 
 fn auth_error(tenant: &Tenant, req: &AuthRequest, error: &str, description: &str) -> Response {

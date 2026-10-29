@@ -10,6 +10,7 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 - **Provider emulation.** It reproduces the claim shapes, token formats and provider-specific endpoints of Google, GitHub, Microsoft Entra ID, Facebook, Apple, Auth0, Okta, Keycloak, GitLab, Discord and AWS Cognito, such as GitHub's `/user` or Graph's `/me`.
 - **Custom claims everywhere.** The login UI, the device flow, the token generator, the dev API and the CLI all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
 - **Mint tokens without a login.** You can do it from a web page (`/dev`), a JSON API (`/dev/api/token`) or the CLI (`localoidc token`).
+- **See why a request failed.** The request inspector at `/dev/requests` shows every request your app makes, what it sent and the exact reason anything was rejected.
 - **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Declared users](#declared-users) give a team and its CI the same named identities.
 - **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans.
 
@@ -23,6 +24,7 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 - [Endpoints and protocol support](#endpoints-and-protocol-support)
 - [Provider emulation](#provider-emulation)
 - [Minting tokens for development and tests](#minting-tokens-for-development-and-tests)
+- [Inspecting requests](#inspecting-requests)
 - [Configuration](#configuration)
 - [Conformance](#conformance)
 - [Contributing](#contributing)
@@ -89,6 +91,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
+| Request inspector (non-standard) | `/dev/requests`, `/dev/api/requests` (GET/DELETE) |
 | Built-in test redirect target | `/callback` |
 | Health check | `/health` |
 
@@ -241,6 +244,26 @@ curl -s -X POST http://localhost:9400/dev/api/clock -H 'content-type: applicatio
 - The `/dev` page has the same controls. While the clock is shifted, every page shows a warning banner.
 - `--clock-offset <duration>` (`LOCALOIDC_CLOCK_OFFSET`) sets an offset at startup. It also applies to `localoidc token`, which doesn't see offsets set on a running server through the API.
 - The offset isn't saved, so a restart always goes back to real time. Records that expire while the clock is ahead are purged within a minute. After that, moving the clock back doesn't restore them.
+
+## Inspecting requests
+
+Open `http://localhost:9400/dev/requests` (linked as **Requests** in the top bar) to see the last 500 requests to every issuer, newest first. New requests appear as they arrive.
+
+- Each row shows the endpoint, the client and the outcome: `redirect with code`, `tokens: access_token, id_token`, `page: Sign in`, or the error code. Failures are marked in red.
+- Click a row to see its parameters, the `Authorization` header, where a redirect went and, for failures, why. For example: `invalid_grant — redirect_uri does not match the authorization request`. That includes errors sent back to your app's redirect URI and GitHub-style errors returned with HTTP 200.
+- Filter by `client_id` or to errors only. Discovery, JWKS and localoidc's own `/dev` tools are hidden unless you ask for them.
+- Secrets (`client_secret`, `password`, `client_assertion`, Basic credentials) are masked. Tokens and codes are cut to their first 8 characters, which is enough to match them across requests.
+- The list is kept in memory, so a restart clears it.
+
+Tests can use the same data to check what an app actually sent:
+
+```sh
+curl -s -X DELETE http://localhost:9400/dev/api/requests      # start from a clean slate
+# ... run the login flow ...
+curl -s 'http://localhost:9400/dev/api/requests?client_id=my-app&errors=true' | jq '.entries[] | {endpoint, error, error_description}'
+```
+
+`GET /dev/api/requests` returns `{"entries": [...], "latest_id": …, "capacity": 500}` and accepts `client_id`, `errors=true`, `limit` and `after=<id>` (only newer entries). Clearing doesn't reset ids, so polling with `after` never misses a request.
 
 ## Configuration
 
