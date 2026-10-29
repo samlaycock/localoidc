@@ -3,18 +3,27 @@
     "test-name": "oidcc-idtoken-unsigned",
     "variant": "*",
     "configuration-filename": "*",
-    "comment": "Unsigned (alg=none) ID tokens are not supported."
+    "comment": "Unsigned (alg=none) ID tokens are not supported.",
+    "groups": [
+      "dynamic"
+    ]
   },
   {
     "test-name": "oidcc-registration-sector-uri",
     "variant": "*",
     "configuration-filename": "*",
-    "comment": "Pairwise subjects / sector_identifier_uri are not supported."
+    "comment": "Pairwise subjects / sector_identifier_uri are not supported.",
+    "groups": [
+      "dynamic"
+    ]
   },
   {
     "test-name": "oidcc-registration-sector-bad",
     "variant": "*",
     "configuration-filename": "*",
-    "comment": "Pairwise subjects / sector_identifier_uri are not supported."
+    "comment": "Pairwise subjects / sector_identifier_uri are not supported.",
+    "groups": [
+      "dynamic"
+    ]
   }
 ]
