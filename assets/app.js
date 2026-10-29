@@ -1,4 +1,8 @@
-// localoidc claims editor — shared by the login, device and token generator pages.
+// localoidc claims wizard — shared by the login, device and token generator pages.
+//
+// Saved identities sit at the top for one-click reuse; below them a short wizard
+// (provider -> claims -> custom claims [-> token options]) builds a new identity.
+// The page's own submit buttons stay server-rendered so it works without JS too.
 (function () {
   'use strict';
   const dataEl = document.getElementById('lo-data');
@@ -6,8 +10,12 @@
   const data = JSON.parse(dataEl.textContent);
   const presets = data.presets;
   const byId = Object.fromEntries(presets.map((p) => [p.id, p]));
-  const LS_KEY = 'localoidc.identities';
+  const LS_SAVED = 'localoidc.identities';
+  const LS_LAST = 'localoidc.last';
   const root = document.getElementById('lo-editor');
+  const form = document.getElementById('lo-form');
+  const isDev = data.mode === 'dev';
+  const $ = (id) => document.getElementById(id);
 
   const h = (tag, attrs = {}, ...children) => {
     const el = document.createElement(tag);
@@ -24,8 +32,8 @@
     return el;
   };
 
-  // ---------------------------------------------------------------- state
-  const state = { preset: null, values: {}, custom: '', access: '' };
+  // ---------------------------------------------------------------- identity state
+  const state = { preset: null, values: {}, custom: '', access: '', step: 0, showAll: false };
 
   const fieldText = (f, v) => {
     if (v === undefined || v === null) return f.kind === 'bool' ? false : '';
@@ -37,34 +45,26 @@
     return String(v);
   };
 
-  /** Load a claim set into the editor, splitting preset fields from custom claims. */
+  /** Load an identity into the editor; with no claims, switch preset and keep custom claims. */
   function load(presetId, claims, accessClaims) {
     const p = byId[presetId] || byId[data.defaultPreset] || presets[0];
     state.preset = p.id;
     state.values = {};
+    for (const f of p.fields) state.values[f.name] = fieldText(f, claims ? claims[f.name] : f.default);
+    if (!claims) return;
     const names = new Set(p.fields.map((f) => f.name));
-    for (const f of p.fields) {
-      state.values[f.name] = fieldText(f, claims ? claims[f.name] : f.default);
-    }
     const custom = {};
-    if (claims) {
-      for (const [k, v] of Object.entries(claims)) {
-        if (names.has(k)) continue;
-        if (k === 'sub' && p.sub_from) continue; // derived
-        custom[k] = v;
-      }
+    for (const [k, v] of Object.entries(claims)) {
+      if (names.has(k) || (k === 'sub' && p.sub_from)) continue;
+      custom[k] = v;
     }
-    // Switching presets (claims == null) keeps whatever custom claims were typed.
-    if (claims) {
-      state.custom = Object.keys(custom).length ? JSON.stringify(custom, null, 2) : '';
-      state.access = accessClaims && Object.keys(accessClaims).length ? JSON.stringify(accessClaims, null, 2) : '';
-    }
+    state.custom = Object.keys(custom).length ? JSON.stringify(custom, null, 2) : '';
+    state.access = accessClaims && Object.keys(accessClaims).length ? JSON.stringify(accessClaims, null, 2) : '';
   }
 
   function applyLoginHint(hint) {
     if (!hint) return;
-    const p = byId[state.preset];
-    const has = (n) => p.fields.some((f) => f.name === n);
+    const has = (n) => byId[state.preset].fields.some((f) => f.name === n);
     if (hint.includes('@')) {
       if (has('email')) state.values.email = hint;
     } else {
@@ -89,7 +89,7 @@
         }
       } else if (f.kind === 'json') {
         if (v && String(v).trim()) {
-          try { claims[f.name] = JSON.parse(v); } catch (e) { errors.push(`${f.label}: invalid JSON`); }
+          try { claims[f.name] = JSON.parse(v); } catch { errors.push(`${f.label}: invalid JSON`); }
         }
       } else if (v !== '' && v != null) claims[f.name] = v;
     }
@@ -106,41 +106,123 @@
       if (v === null) delete claims[k]; else claims[k] = v;
     }
     if (!claims.sub && p.sub_from && claims[p.sub_from] != null) claims.sub = String(claims[p.sub_from]);
-    const access = parseObj(state.access, 'Access token claims');
-    return { claims, access, errors };
+    return { claims, access: parseObj(state.access, 'Access token claims'), errors };
   }
 
-  // ---------------------------------------------------------------- saved identities
-  const saved = () => { try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; } };
-  const store = (list) => localStorage.setItem(LS_KEY, JSON.stringify(list));
+  const describe = (claims) => claims.email || claims.name || claims.preferred_username || claims.login || claims.username || claims.sub || 'identity';
 
-  // ---------------------------------------------------------------- render
+  // ---------------------------------------------------------------- saved identities
+  const readJson = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+  const saved = () => readJson(LS_SAVED, []);
+  const storeSaved = (list) => localStorage.setItem(LS_SAVED, JSON.stringify(list));
+  const rememberLast = (identity) => localStorage.setItem(LS_LAST, JSON.stringify(identity));
+
+  function saveCurrent(name) {
+    const { claims, access, errors } = build();
+    if (errors.length) { refresh(); return false; }
+    const next = saved().filter((s) => s.name !== name);
+    next.unshift({ name, preset: state.preset, claims, access });
+    storeSaved(next);
+    return true;
+  }
+
+  // ---------------------------------------------------------------- actions
+  /** Sign in (login/device) or generate tokens (dev) with the current editor contents. */
+  function go() {
+    if (isDev) { $('dev-generate').click(); return; }
+    form.requestSubmit(form.querySelector('button[value=approve]'));
+  }
+
+  function useIdentity(identity) {
+    load(identity.preset, identity.claims, identity.access);
+    render();
+    go();
+  }
+
+  function editIdentity(identity) {
+    load(identity.preset, identity.claims, identity.access);
+    state.step = 1;
+    render();
+  }
+
+  // ---------------------------------------------------------------- rendering
+  const STEPS = [
+    { id: 'provider', label: 'Provider' },
+    { id: 'claims', label: 'Claims' },
+    { id: 'custom', label: 'Custom claims' },
+    ...(isDev ? [{ id: 'options', label: 'Token options' }] : []),
+  ];
+  const actionWord = isDev ? 'Generate as' : 'Sign in as';
   let previewEl, errorEl;
 
   function refresh() {
     const { claims, access, errors } = build();
     if (previewEl) {
-      const p = byId[state.preset];
       const preview = { ...claims };
       if (Object.keys(access).length) preview['(access token only)'] = access;
       previewEl.textContent = JSON.stringify(preview, null, 2);
-      previewEl.dataset.protocol = p.protocol;
     }
     if (errorEl) {
       errorEl.textContent = errors.join(' · ');
       errorEl.hidden = !errors.length;
     }
+    const nameInput = $('lo-save-name');
+    if (nameInput && !nameInput.dataset.touched) nameInput.value = describe(claims);
+  }
+
+  function quickSection() {
+    const items = [];
+    if (data.previous && !isDev) items.push({ kind: 'session', label: 'Active session', identity: { ...data.previous, access: data.previous.access_claims } });
+    // "Last used" only when it isn't already offered as the session or a saved identity.
+    const key = (i) => JSON.stringify([i.preset, i.claims]);
+    const last = readJson(LS_LAST, null);
+    const offered = new Set([...items.map((i) => key(i.identity)), ...saved().map(key)]);
+    if (last && !offered.has(key(last))) items.push({ kind: 'last', label: 'Last used', identity: last });
+    saved().forEach((s, i) => items.push({ kind: 'saved', label: s.name, identity: s, index: i }));
+
+    const cards = items.map((item) => {
+      const p = byId[item.identity.preset] || presets[0];
+      const who = describe(item.identity.claims || {});
+      return h('div', { class: `quick-card is-${item.kind}`, style: `--c:${p.color}` },
+        h('div', { class: 'quick-meta' },
+          h('span', { class: 'quick-label' }, item.kind === 'saved' ? item.label : h('span', {}, h('em', {}, item.label), ` · ${who}`)),
+          h('span', { class: 'quick-provider' }, h('span', { class: 'dot' }), p.name, item.kind === 'saved' && item.label !== who ? ` · ${who}` : null)),
+        h('div', { class: 'quick-actions' },
+          h('button', { type: 'button', class: 'btn small primary', onclick: () => useIdentity(item.identity) }, isDev ? 'Generate' : 'Sign in'),
+          h('button', { type: 'button', class: 'btn small ghost', onclick: () => editIdentity(item.identity) }, 'Edit'),
+          item.kind === 'saved'
+            ? h('button', { type: 'button', class: 'btn small ghost icon', title: 'Delete', onclick: () => {
+                const list = saved(); list.splice(item.index, 1); storeSaved(list); render();
+              } }, '×')
+            : null));
+    });
+
+    return h('section', { class: 'quick' },
+      h('div', { class: 'section-title' }, isDev ? 'Saved identities' : 'Quick sign in'),
+      cards.length
+        ? h('div', { class: 'quick-list' }, cards)
+        : h('p', { class: 'muted small' }, 'Identities you save (bottom of the page) show up here for one-click reuse.'));
+  }
+
+  function stepNav() {
+    return h('nav', { class: 'steps' }, STEPS.map((s, i) =>
+      h('button', {
+        type: 'button',
+        class: `step ${i === state.step ? 'current' : ''} ${i < state.step ? 'done' : ''}`,
+        onclick: () => { state.step = i; render(); },
+      }, h('span', { class: 'step-num' }, String(i + 1)), s.label)));
   }
 
   function fieldInput(f) {
     const v = state.values[f.name];
     const id = `f-${f.name.replace(/[^a-z0-9]/gi, '_')}`;
     const set = (val) => { state.values[f.name] = val; refresh(); };
-    let input;
     if (f.kind === 'bool') {
-      input = h('input', { type: 'checkbox', id, checked: !!v, onchange: (e) => set(e.target.checked) });
-      return h('label', { class: 'field check-field', for: id, title: f.help || '' }, input, h('span', {}, f.label), h('code', { class: 'claim-name' }, f.name));
+      return h('label', { class: 'field check-field', for: id, title: f.help || '' },
+        h('input', { type: 'checkbox', id, checked: !!v, onchange: (e) => set(e.target.checked) }),
+        h('span', {}, f.label), h('code', { class: 'claim-name' }, f.name));
     }
+    let input;
     if (f.kind === 'json') {
       input = h('textarea', { id, rows: String(v).includes('\n') ? 4 : 1, spellcheck: false, oninput: (e) => set(e.target.value) });
       input.value = v;
@@ -153,88 +235,97 @@
       f.help ? h('small', { class: 'help' }, f.help) : null);
   }
 
-  function render() {
+  function providerStep() {
+    const pinned = data.tenantPreset ? byId[data.tenantPreset] : null;
+    return [
+      h('p', { class: 'muted step-intro' }, 'Which identity provider should this look like? This sets the claim names and token formats.',
+        pinned ? ` This issuer emulates ${pinned.name}.` : ''),
+      h('div', { class: 'provider-grid' }, presets.map((q) =>
+        h('button', {
+          type: 'button',
+          class: `provider-card ${q.id === state.preset ? 'active' : ''}`,
+          style: `--c:${q.color}`,
+          onclick: () => { if (q.id !== state.preset) load(q.id, null, null); state.step = 1; render(); },
+        },
+        h('span', { class: 'provider-name' }, h('span', { class: 'dot' }), q.name, q.protocol === 'oauth2' ? h('small', {}, 'OAuth2') : null),
+        h('span', { class: 'provider-desc' }, q.description)))),
+    ];
+  }
+
+  function claimsStep() {
     const p = byId[state.preset];
-    root.replaceChildren();
+    const common = p.fields.filter((f) => !f.advanced);
+    const advanced = p.fields.filter((f) => f.advanced);
+    return [
+      h('p', { class: 'muted step-intro' }, `${p.name} claims. Empty fields are left out of the token.`),
+      h('div', { class: 'fields' }, common.map(fieldInput)),
+      advanced.length
+        ? h('button', { type: 'button', class: 'btn small ghost more', onclick: () => { state.showAll = !state.showAll; render(); } },
+            state.showAll ? 'Hide extra claims' : `Show all claims (${advanced.length} more)`)
+        : null,
+      state.showAll && advanced.length ? h('div', { class: 'fields' }, advanced.map(fieldInput)) : null,
+    ];
+  }
 
-    // Previous session shortcut (login / device).
-    if (data.previous && data.mode !== 'dev') {
-      const prev = data.previous;
-      const who = prev.claims.email || prev.claims.name || prev.claims.preferred_username || prev.claims.login || prev.claims.sub;
-      root.append(h('div', { class: 'previous' },
-        h('span', {}, 'Active session: ', h('b', {}, who), ` (${(byId[prev.preset] || {}).name || prev.preset})`),
-        h('button', { type: 'button', class: 'btn small', onclick: () => {
-          load(prev.preset, prev.claims, prev.access_claims);
-          const form = document.getElementById('lo-form');
-          syncHidden();
-          form.requestSubmit(form.querySelector('[value=approve]'));
-        } }, 'Continue as this user')));
-    }
-
-    // Provider picker.
-    root.append(h('div', { class: 'section-title' }, 'Emulate provider',
-      data.tenantPreset ? h('small', { class: 'muted' }, ` — issuer is pinned to ${byId[data.tenantPreset].name}`) : null));
-    root.append(h('div', { class: 'providers' }, presets.map((q) =>
-      h('button', {
-        type: 'button',
-        class: `provider ${q.id === p.id ? 'active' : ''}`,
-        style: `--c:${q.color}`,
-        title: q.description,
-        onclick: () => { if (q.id !== state.preset) { load(q.id, null, null); render(); } },
-      }, h('span', { class: 'dot' }), q.name, q.protocol === 'oauth2' ? h('small', {}, 'OAuth2') : null))));
-    root.append(h('p', { class: 'preset-desc muted' }, p.description));
-
-    // Saved identities.
-    const list = saved();
-    const select = h('select', { class: 'saved-select' },
-      h('option', { value: '' }, list.length ? 'Saved identities…' : 'No saved identities'),
-      list.map((s, i) => h('option', { value: String(i) }, `${s.name} (${(byId[s.preset] || {}).name || s.preset})`)));
-    root.append(h('div', { class: 'saved' },
-      select,
-      h('button', { type: 'button', class: 'btn small', onclick: () => {
-        const s = list[Number(select.value)];
-        if (s) { load(s.preset, s.claims, s.access); render(); }
-      } }, 'Load'),
-      h('button', { type: 'button', class: 'btn small', onclick: () => {
-        const { claims, access, errors } = build();
-        if (errors.length) return alert(errors.join('\n'));
-        const name = prompt('Name this identity', claims.email || claims.name || claims.sub || 'identity');
-        if (!name) return;
-        const next = saved().filter((s) => s.name !== name);
-        next.push({ name, preset: state.preset, claims, access });
-        store(next); render();
-      } }, 'Save current'),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => {
-        const i = Number(select.value);
-        if (select.value === '' || !list[i]) return;
-        list.splice(i, 1); store(list); render();
-      } }, 'Delete'),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => { load(state.preset, null, null); state.custom = ''; state.access = ''; render(); } }, 'Reset to defaults')));
-
-    // Fields.
-    root.append(h('div', { class: 'section-title' }, 'Claims'));
-    root.append(h('div', { class: 'fields' }, p.fields.map(fieldInput)));
-
-    // Custom claims.
-    const custom = h('textarea', { rows: 5, spellcheck: false, placeholder: '{\n  "https://example.com/tenant": "acme",\n  "permissions": ["read", "write"],\n  "locale": null\n}', oninput: (e) => { state.custom = e.target.value; refresh(); } });
+  function customStep() {
+    const custom = h('textarea', { rows: 6, spellcheck: false, placeholder: '{\n  "https://example.com/tenant": "acme",\n  "permissions": ["read", "write"],\n  "locale": null\n}', oninput: (e) => { state.custom = e.target.value; refresh(); } });
     custom.value = state.custom;
     const access = h('textarea', { rows: 4, spellcheck: false, placeholder: '{\n  "permissions": ["orders:write"]\n}', oninput: (e) => { state.access = e.target.value; refresh(); } });
     access.value = state.access;
-    root.append(h('div', { class: 'customs' },
-      h('label', { class: 'field wide' }, h('span', { class: 'field-label' }, 'Custom claims', h('small', { class: 'muted' }, ' merged into ID token, userinfo and access token · null removes a claim · reserved claims like aud/exp can be overridden')), custom),
-      h('label', { class: 'field wide' }, h('span', { class: 'field-label' }, 'Access-token-only claims'), access)));
-
-    errorEl = h('p', { class: 'notice error', hidden: true });
     previewEl = h('pre', { class: 'code preview' });
-    root.append(errorEl, h('details', { class: 'preview-wrap', open: data.mode === 'dev' ? null : true },
-      h('summary', {}, 'Claims preview ', h('small', { class: 'muted' }, '(iss, aud, exp, nonce… are added by the server)')), previewEl));
+    return [
+      h('p', { class: 'muted step-intro' }, 'Optional. Add or override any claim; null removes one. Reserved claims like aud or exp can be overridden for negative tests.'),
+      h('div', { class: 'customs' },
+        h('label', { class: 'field wide' }, h('span', { class: 'field-label' }, 'Custom claims', h('small', { class: 'muted' }, 'ID token, userinfo and access token')), custom),
+        h('label', { class: 'field wide' }, h('span', { class: 'field-label' }, 'Access-token-only claims'), access)),
+      h('div', { class: 'section-title' }, 'Preview ', h('small', { class: 'muted' }, '(iss, aud, exp, nonce… are added by the server)')),
+      previewEl,
+    ];
+  }
+
+  let devOptions;
+  // The token options panel is only in the document on its step, so look inside it directly.
+  const opt = (id) => devOptions.querySelector(`#${id}`);
+  function optionsStep() {
+    devOptions.hidden = false;
+    return [h('p', { class: 'muted step-intro' }, 'Who the tokens are for and how long they last.'), devOptions];
+  }
+
+  function render() {
+    previewEl = null;
+    const step = STEPS[state.step].id;
+    const panel = { provider: providerStep, claims: claimsStep, custom: customStep, options: optionsStep }[step]();
+    const last = state.step === STEPS.length - 1;
+    errorEl = h('p', { class: 'notice error', hidden: true });
+    root.replaceChildren(
+      quickSection(),
+      h('section', { class: 'wizard' },
+        h('div', { class: 'section-title' }, isDev ? 'New token' : 'New identity'),
+        stepNav(),
+        h('div', { class: 'step-panel' }, panel),
+        h('div', { class: 'step-footer' },
+          state.step > 0 ? h('button', { type: 'button', class: 'btn small ghost', onclick: () => { state.step--; render(); } }, '← Back') : h('span'),
+          !last ? h('button', { type: 'button', class: 'btn small', onclick: () => { state.step++; render(); } }, `Next: ${STEPS[state.step + 1].label} →`) : null)),
+      errorEl);
     refresh();
   }
 
+  /** "Save as …" sits next to the page's Sign in / Generate button, so it's visible at every step. */
+  function mountSaveBar() {
+    const actions = (form || root.parentElement).querySelector('.actions');
+    const name = h('input', { id: 'lo-save-name', class: 'save-name', placeholder: 'Name', oninput: (e) => (e.target.dataset.touched = '1') });
+    const btn = h('button', { type: 'button', class: 'btn ghost', onclick: () => {
+      const label = name.value.trim() || describe(build().claims);
+      if (saveCurrent(label)) { btn.textContent = 'Saved ✓'; setTimeout(() => (btn.textContent = 'Save identity'), 1400); render(); }
+    } }, 'Save identity');
+    actions.classList.add('action-bar');
+    actions.append(h('div', { class: 'save-bar' }, name, btn));
+  }
+
   function syncHidden() {
-    const form = document.getElementById('lo-form');
-    if (!form) return [];
     const { claims, access, errors } = build();
+    if (!errors.length) rememberLast({ preset: state.preset, claims, access });
+    if (!form) return errors;
     form.elements.preset.value = state.preset;
     form.elements.claims.value = JSON.stringify(claims);
     form.elements.access_claims.value = JSON.stringify(access);
@@ -242,13 +333,19 @@
   }
 
   // ---------------------------------------------------------------- init
+  if (isDev) {
+    devOptions = $('dev-options');
+    devOptions.remove();
+  }
   const prev = data.previous;
-  if (prev && byId[prev.preset] && data.mode !== 'dev') load(prev.preset, prev.claims, prev.access_claims);
+  if (prev && byId[prev.preset] && !isDev) load(prev.preset, prev.claims, prev.access_claims);
   else load(data.defaultPreset, null, null);
   applyLoginHint(data.loginHint);
+  if (data.tenantPreset) state.step = 1;
   render();
+  mountSaveBar();
+  refresh(); // fills in the save bar's suggested name
 
-  const form = document.getElementById('lo-form');
   if (form) {
     form.addEventListener('submit', (e) => {
       if (e.submitter && e.submitter.value === 'deny') return;
@@ -257,11 +354,10 @@
     });
   }
 
-  if (data.mode === 'dev') initDev();
+  if (isDev) initDev();
 
   // ---------------------------------------------------------------- token generator
   function initDev() {
-    const $ = (id) => document.getElementById(id);
     const out = $('dev-result');
     $('dev-rotate').addEventListener('click', async (e) => {
       const btn = e.target;
@@ -282,15 +378,16 @@
     $('dev-generate').addEventListener('click', async () => {
       const { claims, access, errors } = build();
       if (errors.length) { refresh(); return; }
+      syncHidden();
       const body = {
         preset: state.preset,
-        client_id: $('dev-client').value || undefined,
-        audience: $('dev-audience').value || undefined,
-        scope: $('dev-scope').value,
-        expires_in: Number($('dev-ttl').value) || undefined,
-        nonce: $('dev-nonce').value || undefined,
-        id_token: $('dev-idtoken').checked,
-        refresh_token: $('dev-refresh').checked,
+        client_id: opt('dev-client').value || undefined,
+        audience: opt('dev-audience').value || undefined,
+        scope: opt('dev-scope').value,
+        expires_in: Number(opt('dev-ttl').value) || undefined,
+        nonce: opt('dev-nonce').value || undefined,
+        id_token: opt('dev-idtoken').checked,
+        refresh_token: opt('dev-refresh').checked,
         defaults: false,
         claims,
         access_token_claims: access,

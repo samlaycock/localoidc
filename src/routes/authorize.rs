@@ -517,8 +517,8 @@ fn render_login(
 <aside class="card request">
   <div class="eyebrow">Authorization request</div>
   <h1>Sign in to <span class="accent">{title}</span></h1>
-  <p class="muted">Pick a provider to emulate and set the claims for this session. Nothing leaves your machine.</p>
-  <dl class="kv">{details}</dl>
+  <div class="chips">{scopes}</div>
+  <details class="request-details"><summary>Request details</summary><dl class="kv">{details}</dl></details>
 </aside>
 <form class="card editor-card" method="post" action="{action}" id="lo-form">
   <input type="hidden" name="req" value="{req_id}">
@@ -534,6 +534,8 @@ fn render_login(
 </div>
 {data}"#,
         title = esc(title),
+        scopes =
+            if scopes.is_empty() { r#"<span class="chip muted">no scopes</span>"#.to_string() } else { scopes.clone() },
         details = details.join(""),
         action = tenant.path("/login"),
         req_id = esc(&req.id),
