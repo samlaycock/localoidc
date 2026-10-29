@@ -28,6 +28,8 @@ pub enum OneOrMany {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct DevTokenRequest {
+    /// Declared user (`[[users]]` in the config file) whose claims `claims` are merged over.
+    pub user: Option<String>,
     /// Provider preset whose claim shape/defaults are used.
     pub preset: Option<String>,
     pub client_id: Option<String>,
@@ -47,12 +49,27 @@ pub struct DevTokenRequest {
 }
 
 pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<Value, OAuthError> {
-    let preset = match &req.preset {
-        Some(id) => presets::get(id).ok_or_else(|| OAuthError::invalid_request(format!("unknown preset '{id}'")))?,
-        None => tenant.default_preset(&state.config),
+    let explicit = match &req.preset {
+        Some(id) => {
+            Some(presets::get(id).ok_or_else(|| OAuthError::invalid_request(format!("unknown preset '{id}'")))?)
+        }
+        None => None,
     };
-    let mut claims = if req.defaults.unwrap_or(true) { preset.default_claims() } else { Map::new() };
+    let fallback = tenant.default_preset(&state.config);
+    let (preset, mut claims, mut access_claims) = match &req.user {
+        Some(id) => state
+            .config
+            .user(id)
+            .ok_or_else(|| OAuthError::invalid_request(format!("unknown user '{id}'")))?
+            .resolve(explicit, fallback),
+        None => {
+            let preset = explicit.unwrap_or(fallback);
+            let claims = if req.defaults.unwrap_or(true) { preset.default_claims() } else { Map::new() };
+            (preset, claims, Map::new())
+        }
+    };
     merge_claims(&mut claims, &req.claims);
+    merge_claims(&mut access_claims, &req.access_token_claims);
     preset.ensure_sub(&mut claims);
     let scope = req.scope.unwrap_or_else(|| preset.default_scope.to_string());
     let grant = Grant {
@@ -60,7 +77,7 @@ pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<V
         scope: scope.clone(),
         preset: preset.id.into(),
         claims,
-        access_claims: req.access_token_claims,
+        access_claims,
         nonce: req.nonce,
         auth_time: now(),
         sid: Some(uuid::Uuid::new_v4().to_string()),
@@ -117,6 +134,7 @@ pub async fn api_token_get(
             crate::util::parse_claims_object(raw).map_err(|e| OAuthError::invalid_request(format!("{k}: {e}")))
         };
         match k.as_str() {
+            "user" => req.user = Some(v),
             "preset" => req.preset = Some(v),
             "client_id" => req.client_id = Some(v),
             "audience" | "aud" => req.audience = Some(OneOrMany::One(v)),
@@ -178,6 +196,12 @@ pub async fn api_rotate_keys(State(state): State<AppState>, tenant: Tenant) -> R
 
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
+}
+
+/// The declared users, with their claims as this issuer would issue them.
+pub async fn api_users(State(state): State<AppState>, tenant: Tenant) -> impl IntoResponse {
+    let fallback = tenant.default_preset(&state.config);
+    Json(state.config.users.iter().map(|u| u.to_json(fallback)).collect::<Vec<_>>())
 }
 
 pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers: HeaderMap) -> Response {

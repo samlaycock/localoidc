@@ -257,19 +257,33 @@ fn password(
     params: &HashMap<String, String>,
 ) -> Result<Value, OAuthError> {
     let username = require(params, "username")?;
-    let preset = non_empty(params, "dev_preset")
-        .and_then(|p| presets::get(&p))
-        .unwrap_or_else(|| tenant.default_preset(&state.config));
-    let mut claims = preset.default_claims();
-    preset.apply_login_hint(&mut claims, &username);
+    let explicit = non_empty(params, "dev_preset").and_then(|p| presets::get(&p));
+    let fallback = tenant.default_preset(&state.config);
+    // A username naming a declared user (by id or email) signs in as that user; anything else
+    // gets the preset defaults with the username applied.
+    let (preset, mut claims, mut access_claims) = match state.config.user_for_login(&username) {
+        Some(user) => {
+            if user.password.as_ref().is_some_and(|p| params.get("password") != Some(p)) {
+                return Err(OAuthError::invalid_grant("invalid username or password"));
+            }
+            user.resolve(explicit, fallback)
+        }
+        None => {
+            let preset = explicit.unwrap_or(fallback);
+            let mut claims = preset.default_claims();
+            preset.apply_login_hint(&mut claims, &username);
+            (preset, claims, Map::new())
+        }
+    };
     crate::util::merge_claims(&mut claims, &dev_claims(params, "dev_claims")?);
+    crate::util::merge_claims(&mut access_claims, &dev_claims(params, "dev_access_claims")?);
     preset.ensure_sub(&mut claims);
     let grant = Grant {
         client_id: client_id.unwrap_or_else(|| "localoidc-dev".into()),
         scope: params.get("scope").cloned().unwrap_or_else(|| preset.default_scope.into()),
         preset: preset.id.into(),
         claims,
-        access_claims: dev_claims(params, "dev_access_claims")?,
+        access_claims,
         nonce: None,
         auth_time: now(),
         sid: None,

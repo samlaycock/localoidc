@@ -26,3 +26,13 @@ client_secret = "dev-secret"
 client_name = "My Web App"
 redirect_uris = ["http://localhost:3000/api/auth/callback"]
 post_logout_redirect_uris = ["http://localhost:3000/"]
+
+# Named users for the login page, dev_user=<id>, the dev API ("user") and `localoidc token --user`.
+# Claims are merged over the preset defaults; each user gets a stable provider-shaped `sub`.
+[[users]]
+id = "alice"
+label = "Alice (admin)"
+preset = "google"
+claims = { email = "alice@acme.dev", name = "Alice Admin", roles = ["admin"] }
+access_claims = { permissions = ["orders:write"] }
+# password = "s3cret"   # enforced by the password grant when set

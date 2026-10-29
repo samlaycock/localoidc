@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Deserialize;
 
 use crate::state::Client;
+use crate::users::User;
 
 #[derive(Parser, Debug)]
 #[command(name = "localoidc", version, about = "A local OpenID Connect / OAuth 2.0 provider for offline development")]
@@ -23,6 +24,8 @@ pub enum Command {
     Token(Box<TokenArgs>),
     /// List the available provider presets.
     Presets,
+    /// List the users declared in the config file.
+    Users,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -70,6 +73,9 @@ pub struct ServerArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct TokenArgs {
+    /// Declared user (from `[[users]]` in the config file) to mint tokens for.
+    #[arg(long)]
+    pub user: Option<String>,
     /// Provider preset whose default claims are used.
     #[arg(long)]
     pub preset: Option<String>,
@@ -137,6 +143,7 @@ struct FileConfig {
     access_token_identity_claims: Option<bool>,
     claims_by_scope: Option<bool>,
     clients: Vec<Client>,
+    users: Vec<User>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +169,8 @@ pub struct Config {
     /// every claim set in the UI/API shows up everywhere.
     pub claims_by_scope: bool,
     pub clients: Vec<Client>,
+    /// Named identities from `[[users]]`.
+    pub users: Vec<User>,
 }
 
 impl Default for Config {
@@ -184,6 +193,7 @@ impl Default for Config {
             access_token_identity_claims: true,
             claims_by_scope: false,
             clients: vec![],
+            users: vec![],
         }
     }
 }
@@ -215,6 +225,7 @@ impl Config {
         if crate::presets::get(&default_preset).is_none() {
             anyhow::bail!("unknown default preset '{default_preset}'");
         }
+        crate::users::validate(&file.users)?;
         let data_dir = args
             .data_dir
             .clone()
@@ -239,6 +250,16 @@ impl Config {
             access_token_identity_claims: file.access_token_identity_claims.unwrap_or(true),
             claims_by_scope: file.claims_by_scope.unwrap_or(false),
             clients: file.clients,
+            users: file.users,
         })
+    }
+
+    pub fn user(&self, id: &str) -> Option<&User> {
+        self.users.iter().find(|u| u.id == id)
+    }
+
+    /// The user a `login_hint` or `username` refers to, by id or email.
+    pub fn user_for_login(&self, login: &str) -> Option<&User> {
+        self.users.iter().find(|u| u.matches(login))
     }
 }

@@ -307,20 +307,33 @@ pub async fn handle_authorize(
 
     let default_preset = tenant.default_preset(&state.config);
 
-    // Non-standard: `dev_claims` (JSON or base64url JSON) signs in immediately, for automated tests.
-    if let Some(raw) = non_empty(&params, "dev_claims") {
-        let overrides = match parse_claims_object(&raw) {
-            Ok(m) => m,
+    // Non-standard: `dev_user` (a declared user) and/or `dev_claims` (JSON or base64url JSON) sign
+    // in immediately, for automated tests. `dev_claims` are merged over the user's claims.
+    let dev_user = non_empty(&params, "dev_user");
+    let dev_claims = non_empty(&params, "dev_claims");
+    if dev_user.is_some() || dev_claims.is_some() {
+        let overrides = match dev_claims.as_deref().map(parse_claims_object).transpose() {
+            Ok(m) => m.unwrap_or_default(),
             Err(e) => return fail("invalid_request", &format!("dev_claims: {e}")),
         };
-        let preset = non_empty(&params, "dev_preset").and_then(|p| presets::get(&p)).unwrap_or(default_preset);
-        let mut claims = preset.default_claims();
-        if let Some(hint) = &req.login_hint {
-            preset.apply_login_hint(&mut claims, hint);
-        }
+        let explicit = non_empty(&params, "dev_preset").and_then(|p| presets::get(&p));
+        let (preset, mut claims, access) = match dev_user {
+            Some(id) => match state.config.user(&id) {
+                Some(user) => user.resolve(explicit, default_preset),
+                None => return fail("invalid_request", &format!("dev_user: unknown user '{id}'")),
+            },
+            None => {
+                let preset = explicit.unwrap_or(default_preset);
+                let mut claims = preset.default_claims();
+                if let Some(hint) = &req.login_hint {
+                    preset.apply_login_hint(&mut claims, hint);
+                }
+                (preset, claims, Map::new())
+            }
+        };
         crate::util::merge_claims(&mut claims, &overrides);
         preset.ensure_sub(&mut claims);
-        return complete(state, tenant, &req, preset.id, claims, Map::new(), None);
+        return complete(state, tenant, &req, preset.id, claims, access, None);
     }
 
     let session = current_session(state, tenant, headers);
@@ -342,11 +355,19 @@ pub async fn handle_authorize(
                 complete(state, tenant, &req, &s.preset, s.claims, s.access_claims, Some((sid, s.auth_time)))
             }
             _ => {
-                let mut claims = default_preset.default_claims();
-                if let Some(hint) = &req.login_hint {
-                    default_preset.apply_login_hint(&mut claims, hint);
-                }
-                complete(state, tenant, &req, default_preset.id, claims, Map::new(), None)
+                // A login_hint naming a declared user (by id or email) signs in as that user.
+                let user = req.login_hint.as_deref().and_then(|h| state.config.user_for_login(h));
+                let (preset, claims, access) = match user {
+                    Some(user) => user.resolve(None, default_preset),
+                    None => {
+                        let mut claims = default_preset.default_claims();
+                        if let Some(hint) = &req.login_hint {
+                            default_preset.apply_login_hint(&mut claims, hint);
+                        }
+                        (default_preset, claims, Map::new())
+                    }
+                };
+                complete(state, tenant, &req, preset.id, claims, access, None)
             }
         };
     }
@@ -456,6 +477,7 @@ pub fn editor_data(
         "tenantPreset": tenant.preset.map(|p| p.id),
         "previous": previous.map(|s| json!({ "preset": s.preset, "claims": s.claims, "access_claims": s.access_claims })),
         "loginHint": login_hint,
+        "users": state.config.users.iter().map(|u| u.to_json(tenant.default_preset(&state.config))).collect::<Vec<_>>(),
     });
     if let (Value::Object(d), Value::Object(e)) = (&mut data, extra) {
         d.extend(e);
