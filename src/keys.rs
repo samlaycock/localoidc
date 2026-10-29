@@ -11,7 +11,7 @@ use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde_json::{Value, json};
 
-use crate::util::{b64, b64_decode, now};
+use crate::util::{b64, b64_decode, wall_clock};
 
 /// How many retired keys stay in the JWKS (and keep verifying) after a rotation.
 pub const RETIRED_KEYS_KEPT: usize = 2;
@@ -124,7 +124,7 @@ impl Keys {
         if let Some(dir) = &self.dir {
             let retired_dir = dir.join(RETIRED_DIR);
             fs::create_dir_all(&retired_dir).with_context(|| format!("creating {}", retired_dir.display()))?;
-            ring.current.write(&retired_dir.join(format!("{:012}-{}.pem", now(), ring.current.kid)))?;
+            ring.current.write(&retired_dir.join(format!("{:012}-{}.pem", wall_clock(), ring.current.kid)))?;
             // Write-then-rename so a crash never leaves a half-written current key.
             let tmp = dir.join(format!("{CURRENT_FILE}.tmp"));
             next.write(&tmp)?;

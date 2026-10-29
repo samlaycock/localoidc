@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::util::now;
+use crate::clock::Clock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Table {
@@ -60,6 +60,8 @@ impl Table {
 
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Expiry is judged by the server's (possibly shifted) clock.
+    clock: Clock,
 }
 
 fn log<T>(result: rusqlite::Result<T>, op: &str, table: Table) -> Option<T> {
@@ -68,7 +70,7 @@ fn log<T>(result: rusqlite::Result<T>, op: &str, table: Table) -> Option<T> {
 
 impl Store {
     /// Open (creating if needed) the database at `path`, or an in-memory database when `None`.
-    pub fn open(path: Option<&Path>) -> anyhow::Result<Self> {
+    pub fn open(path: Option<&Path>, clock: Clock) -> anyhow::Result<Self> {
         let conn = match path {
             Some(p) => {
                 if let Some(dir) = p.parent() {
@@ -93,7 +95,11 @@ impl Store {
                 table.name()
             ))?;
         }
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self { conn: Mutex::new(conn), clock })
+    }
+
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     pub fn put<T: Serialize>(&self, table: Table, key: &str, value: &T, expires_at: Option<i64>) {
@@ -118,7 +124,7 @@ impl Store {
                     "SELECT value FROM {} WHERE key = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
                     table.name()
                 ),
-                params![key, now()],
+                params![key, self.clock.now()],
                 |r| r.get(0),
             )
             .optional(),
@@ -142,7 +148,7 @@ impl Store {
                     "DELETE FROM {} WHERE key = ?1 AND (expires_at IS NULL OR expires_at > ?2) RETURNING value",
                     table.name()
                 ),
-                params![key, now()],
+                params![key, self.clock.now()],
                 |r| r.get(0),
             )
             .optional(),
@@ -165,7 +171,7 @@ impl Store {
         let rows = conn
             .prepare(&format!("SELECT value FROM {} WHERE expires_at IS NULL OR expires_at > ?1", table.name()))
             .and_then(|mut stmt| {
-                stmt.query_map(params![now()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()
+                stmt.query_map(params![self.clock.now()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()
             });
         log(rows, "select", table).unwrap_or_default().iter().filter_map(|j| serde_json::from_str(j).ok()).collect()
     }
@@ -198,7 +204,7 @@ impl Store {
     /// Delete every expired record.
     pub fn purge_expired(&self) {
         let conn = self.conn.lock().unwrap();
-        let t = now();
+        let t = self.clock.now();
         for table in Table::ALL {
             log(
                 conn.execute(

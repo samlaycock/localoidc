@@ -16,7 +16,7 @@ use crate::routes::token::authenticate_client;
 use crate::state::{AppState, DeviceEntry, DeviceStatus, Grant};
 use crate::store::Table;
 use crate::tenant::Tenant;
-use crate::util::{non_empty, now, parse_form, random_string};
+use crate::util::{non_empty, parse_form, random_string};
 
 const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
 
@@ -52,7 +52,7 @@ pub async fn device_authorization(
         client_id,
         scope: params.get("scope").cloned().unwrap_or_default(),
         audience: ["resource", "audience"].iter().filter_map(|k| non_empty(&params, k)).collect(),
-        exp: now() + 600,
+        exp: state.now() + 600,
         interval: 5,
         last_poll: 0,
         status: DeviceStatus::Pending,
@@ -74,7 +74,10 @@ pub async fn device_authorization(
 fn find_by_user_code(state: &AppState, tenant: &Tenant, code: &str) -> Option<DeviceEntry> {
     let code = normalize_user_code(code);
     state.store.list::<DeviceEntry>(Table::Devices).into_iter().find(|d| {
-        d.user_code == code && d.tenant == tenant.key() && d.exp > now() && matches!(d.status, DeviceStatus::Pending)
+        d.user_code == code
+            && d.tenant == tenant.key()
+            && d.exp > state.now()
+            && matches!(d.status, DeviceStatus::Pending)
     })
 }
 
@@ -174,7 +177,7 @@ pub async fn device_submit(State(state): State<AppState>, tenant: Tenant, body: 
             claims,
             access_claims,
             nonce: None,
-            auth_time: now(),
+            auth_time: state.now(),
             sid: None,
             audience: entry.audience.clone(),
             acr: None,

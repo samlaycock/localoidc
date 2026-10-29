@@ -187,7 +187,7 @@ pub async fn tokeninfo(State(state): State<AppState>, RawQuery(query): RawQuery,
         Some(v) => {
             let mut out = v.claims.clone();
             out.remove("grant");
-            out.insert("expires_in".into(), json!(v.exp - crate::util::now()));
+            out.insert("expires_in".into(), json!(v.exp - state.now()));
             out.entry("sub").or_insert_with(|| json!(v.grant.sub()));
             // Google returns all values as strings.
             let stringly: Map<String, Value> =

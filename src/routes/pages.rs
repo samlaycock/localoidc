@@ -7,12 +7,20 @@ use crate::presets;
 use crate::state::AppState;
 use crate::tenant::Tenant;
 
+// The assets are compiled in and can change with every upgrade, so browsers must not reuse a
+// stale copy against newer HTML. They're small and served locally, so always revalidating is cheap.
 pub async fn css() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../../assets/app.css"))
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
+        include_str!("../../assets/app.css"),
+    )
 }
 
 pub async fn js() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "application/javascript; charset=utf-8")], include_str!("../../assets/app.js"))
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
+        include_str!("../../assets/app.js"),
+    )
 }
 
 pub async fn index(State(state): State<AppState>, tenant: Tenant) -> Response {

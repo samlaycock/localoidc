@@ -18,7 +18,7 @@ use crate::store::Table;
 use crate::tenant::Tenant;
 use crate::tokens::{self, IssueOpts, Kind};
 use crate::util::{
-    b64_std_decode, has_scope, merged_params, non_empty, now, parse_claims_object, sha256_b64, value_to_string,
+    b64_std_decode, has_scope, merged_params, non_empty, parse_claims_object, sha256_b64, value_to_string,
 };
 
 pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -164,7 +164,7 @@ fn authorization_code(
             "authorization code has already been used; tokens issued from it were revoked",
         ));
     }
-    if entry.exp <= now() {
+    if entry.exp <= state.now() {
         return Err(OAuthError::invalid_grant("authorization code has expired"));
     }
     if entry.tenant != tenant.key() {
@@ -284,7 +284,7 @@ fn password(
         claims,
         access_claims,
         nonce: None,
-        auth_time: now(),
+        auth_time: state.now(),
         sid: None,
         audience: audience(params),
         acr: None,
@@ -308,7 +308,7 @@ fn device_code(
         Denied,
         Approved(Box<Grant>),
     }
-    let t = now();
+    let t = state.now();
     // Read-modify-write in one transaction so concurrent polls see consistent slow_down state.
     let poll = state
         .store

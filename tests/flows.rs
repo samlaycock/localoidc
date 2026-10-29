@@ -1078,3 +1078,96 @@ async fn overriding_the_sub_from_claim_rederives_sub() {
     .json();
     assert_eq!(claims(res["id_token"].as_str().unwrap())["sub"], "8");
 }
+
+async fn set_clock(app: &Router, body: Value) -> Resp {
+    let req = Request::post("/dev/api/clock")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    send(app, req).await
+}
+
+#[tokio::test]
+async fn clock_offset_expires_server_side_state() {
+    let app = app();
+    assert_eq!(get(&app, "/dev/api/clock").await.json()["offset"], 0);
+    let tokens = get(&app, "/dev/api/token?email=me@example.com").await.json();
+
+    // An authorization code, a session and a max_age-bound silent login.
+    let auth = |extra: &str| {
+        format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid{extra}", enc(CB))
+    };
+    let res = get(&app, &auth(&format!("&dev_claims={}", enc(r#"{"sub":"s1"}"#)))).await;
+    let cookie = res.cookie();
+    let code = query_param(&res.location(), "code").unwrap();
+
+    // Two hours on: the code (5 min) has expired, and max_age=3600 forces a new login, but the
+    // session itself (30 days) is still there.
+    let res = set_clock(&app, json!({ "advance": "2h" })).await.json();
+    assert_eq!((res["offset"].as_i64(), res["offset_text"].as_str()), (Some(7200), Some("+2h")));
+    let res = post_form(
+        &app,
+        "/token",
+        &[("grant_type", "authorization_code"), ("code", &code), ("client_id", "web"), ("redirect_uri", CB)],
+    )
+    .await;
+    assert_eq!(res.json()["error_description"], "authorization code has expired");
+    let res = get_with(&app, &auth("&prompt=none&max_age=3600"), &[("cookie", &cookie)]).await;
+    assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
+    let res = get_with(&app, &auth("&prompt=none"), &[("cookie", &cookie)]).await;
+    assert!(query_param(&res.location(), "code").is_some());
+
+    // 31 days on: the refresh token and the access token have expired, and so has the session.
+    set_clock(&app, json!({ "offset": "31d" })).await;
+    let res = post_form(
+        &app,
+        "/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("client_id", "localoidc-dev"),
+        ],
+    )
+    .await;
+    assert_eq!(res.json()["error"], "invalid_grant");
+    let bearer = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    assert_eq!(get_with(&app, "/userinfo", &[("authorization", &bearer)]).await.status, StatusCode::UNAUTHORIZED);
+    let res = get_with(&app, &auth("&prompt=none"), &[("cookie", &cookie)]).await;
+    assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
+
+    // Reset: back to real time.
+    assert_eq!(set_clock(&app, json!({ "reset": true })).await.json()["offset"], 0);
+}
+
+#[tokio::test]
+async fn clock_offset_shifts_issued_timestamps() {
+    let (app, _) = app_with(Config { clock_offset: 600, ..Default::default() });
+    let real = localoidc::util::wall_clock();
+    let iat = |res: &Value| res["access_token_claims"]["iat"].as_i64().unwrap();
+    let res = get(&app, "/dev/api/token").await.json();
+    assert!((iat(&res) - real - 600).abs() <= 5, "{}", iat(&res));
+
+    // Behind real time, set in plain seconds.
+    set_clock(&app, json!({ "offset": -3600 })).await;
+    let res = get(&app, "/dev/api/token").await.json();
+    assert!((iat(&res) - real + 3600).abs() <= 5, "{}", iat(&res));
+
+    // Pages warn while the clock is shifted.
+    let page = get(&app, "/dev").await.body;
+    assert!(page.contains("clock-banner") && page.contains("<b>-1h</b> behind"), "{page}");
+    set_clock(&app, json!({ "reset": true })).await;
+    assert!(!get(&app, "/dev").await.body.contains("clock-banner"));
+
+    // Bad requests leave the clock alone.
+    for body in [
+        json!({}),
+        json!({ "offset": 1, "reset": true }),
+        json!({ "advance": "soon" }),
+        json!({ "offset": "6000w" }),
+        json!({ "offset": "40000d" }),
+    ] {
+        let res = set_clock(&app, body.clone()).await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{body}");
+    }
+    assert_eq!(get(&app, "/dev/api/clock").await.json()["offset"], 0);
+}

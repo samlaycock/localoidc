@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::error::{OAuthError, no_store};
 use crate::state::{AppState, Client};
 use crate::store::Table;
-use crate::util::{now, random_string};
+use crate::util::random_string;
 
 fn strings(v: &Value) -> Vec<String> {
     v.as_array().map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default()
@@ -61,7 +61,7 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
     };
 
     meta.insert("client_id".into(), json!(client.client_id));
-    meta.insert("client_id_issued_at".into(), json!(now()));
+    meta.insert("client_id_issued_at".into(), json!(state.now()));
     meta.insert("token_endpoint_auth_method".into(), json!(auth_method));
     if let Some(secret) = &client.client_secret {
         meta.insert("client_secret".into(), json!(secret));

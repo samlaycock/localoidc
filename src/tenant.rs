@@ -14,6 +14,8 @@ pub struct Tenant {
     pub issuer: String,
     /// Path prefix for links (e.g. "" or "/p/google").
     pub prefix: String,
+    /// The server clock's offset when the request arrived, so pages can warn about it.
+    pub clock_offset: i64,
 }
 
 impl Tenant {
@@ -24,7 +26,7 @@ impl Tenant {
             None => base.to_string(),
         };
         let prefix = url::Url::parse(&issuer).map(|u| u.path().trim_end_matches('/').to_string()).unwrap_or_default();
-        Self { preset, issuer, prefix }
+        Self { preset, issuer, prefix, clock_offset: 0 }
     }
 
     pub fn key(&self) -> &'static str {
@@ -83,6 +85,6 @@ impl FromRequestParts<AppState> for Tenant {
             }
             None => None,
         };
-        Ok(Tenant::new(&base, preset))
+        Ok(Tenant { clock_offset: state.clock().offset(), ..Tenant::new(&base, preset) })
     }
 }

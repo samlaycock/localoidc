@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::clock::Clock;
 use crate::config::Config;
 use crate::keys::Keys;
 use crate::store::{Store, Table};
@@ -19,12 +20,22 @@ impl AppState {
     /// Opens `<data_dir>/state.db`, or an in-memory SQLite database when there is no data dir.
     pub fn new(config: Config, keys: Arc<Keys>) -> anyhow::Result<Self> {
         let db = config.data_dir.as_ref().map(|d| d.join("state.db"));
-        let store = Store::open(db.as_deref())?;
+        let store = Store::open(db.as_deref(), Clock::new(config.clock_offset))?;
         // Clients from the config file always win over stale copies in the database.
         for client in &config.clients {
             store.put(Table::Clients, &client.client_id, client, None);
         }
         Ok(Self { config: Arc::new(config), keys, store: Arc::new(store) })
+    }
+
+    /// The server's clock, shifted by the configured or API-set offset.
+    pub fn clock(&self) -> &Clock {
+        self.store.clock()
+    }
+
+    /// Now, by the server's (possibly shifted) clock, in Unix seconds.
+    pub fn now(&self) -> i64 {
+        self.store.clock().now()
     }
 
     pub fn client(&self, client_id: &str) -> Option<Client> {
