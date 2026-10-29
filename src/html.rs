@@ -45,14 +45,31 @@ pub fn page(tenant: &Tenant, title: &str, body: &str) -> Html<String> {
     <a href="{p}/jwks">JWKS</a>
   </nav>
 </header>
-<main>
+{clock}<main>
 {body}
 </main>
 <script src="/assets/app.js"></script>
 </body>
 </html>"#,
         title = esc(title),
+        clock = clock_banner(tenant),
     ))
+}
+
+/// Warn on every page while the clock is shifted: it's easy to forget and it changes everything.
+fn clock_banner(tenant: &Tenant) -> String {
+    if tenant.clock_offset == 0 {
+        return String::new();
+    }
+    let p = &tenant.prefix;
+    let (offset, direction) = (
+        crate::util::format_duration(tenant.clock_offset),
+        if tenant.clock_offset > 0 { "ahead of" } else { "behind" },
+    );
+    format!(
+        r#"<div class="clock-banner" role="status">The localoidc clock is <b>{offset}</b> {direction} real time. Token timestamps and expiry checks use the shifted time. <a href="{p}/dev#clock">Change or reset it</a></div>
+"#
+    )
 }
 
 /// Embed JSON for the page script.

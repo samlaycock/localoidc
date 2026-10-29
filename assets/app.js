@@ -383,6 +383,25 @@
         btn.disabled = false;
       }
     });
+    // Clock: every change reloads the page so the banner and status reflect it.
+    const shiftClock = async (body) => {
+      try {
+        const res = await fetch(data.clockApi, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error_description || res.statusText);
+        sessionStorage.setItem('localoidc.clockAmount', $('dev-clock-amount').value);
+        location.hash = 'clock';
+        location.reload();
+      } catch (err) {
+        alert(`Changing the clock failed: ${err.message}`);
+      }
+    };
+    // Keep the duration across the reload, so repeated moves don't need retyping.
+    $('dev-clock-amount').value = sessionStorage.getItem('localoidc.clockAmount') || $('dev-clock-amount').value;
+    const amount = () => $('dev-clock-amount').value.trim().replace(/^[+-]/, '');
+    $('dev-clock-advance').addEventListener('click', () => shiftClock({ advance: amount() }));
+    $('dev-clock-back').addEventListener('click', () => shiftClock({ advance: `-${amount()}` }));
+    $('dev-clock-reset').addEventListener('click', () => shiftClock({ reset: true }));
     $('dev-generate').addEventListener('click', async () => {
       const { claims, access, errors } = build();
       if (errors.length) { refresh(); return; }

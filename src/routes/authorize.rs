@@ -18,7 +18,7 @@ use crate::store::Table;
 use crate::tenant::Tenant;
 use crate::tokens;
 use crate::util::{
-    has_scope, merged_params, non_empty, now, parse_claims_object, parse_form, random_string, value_to_string,
+    has_scope, merged_params, non_empty, parse_claims_object, parse_form, random_string, value_to_string,
 };
 
 pub const PAR_PREFIX: &str = "urn:ietf:params:oauth:request_uri:";
@@ -286,7 +286,7 @@ pub async fn handle_authorize(
 
     let req = AuthRequest {
         id: uuid::Uuid::new_v4().to_string(),
-        created: now(),
+        created: state.now(),
         tenant: tenant.key().to_string(),
         client_id,
         redirect_uri: redirect_uri.clone(),
@@ -336,7 +336,7 @@ pub async fn handle_authorize(
     }
 
     let session = current_session(state, tenant, headers);
-    let session_fresh = |s: &Session| req.max_age.is_none_or(|max| now() - s.auth_time <= max);
+    let session_fresh = |s: &Session| req.max_age.is_none_or(|max| state.now() - s.auth_time <= max);
     let force_login = req.prompt.iter().any(|p| p == "login");
 
     if req.prompt.iter().any(|p| p == "none") {
@@ -387,12 +387,12 @@ fn complete(
     access_claims: Map<String, Value>,
     existing: Option<(String, i64)>,
 ) -> Response {
-    let (sid, auth_time) = existing.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), now()));
+    let (sid, auth_time) = existing.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), state.now()));
     state.store.put(
         Table::Sessions,
         &sid,
         &Session { preset: preset.into(), claims: claims.clone(), access_claims: access_claims.clone(), auth_time },
-        Some(now() + state.config.refresh_token_ttl),
+        Some(state.now() + state.config.refresh_token_ttl),
     );
 
     let grant = Grant {
@@ -412,7 +412,7 @@ fn complete(
     let mut out: Vec<(String, String)> = vec![];
     let code = req.has_type("code").then(|| {
         let code = random_string(43);
-        let exp = now() + state.config.code_ttl;
+        let exp = state.now() + state.config.code_ttl;
         let entry = CodeEntry {
             grant: grant.clone(),
             tenant: tenant.key().into(),
@@ -608,8 +608,8 @@ pub async fn login(State(state): State<AppState>, tenant: Tenant, headers: Heade
     // original auth_time is kept unless prompt=login or max_age demanded a fresh login.
     let reauth = req.prompt.iter().any(|p| p == "login");
     let existing = current_session(&state, &tenant, &headers).map(|(sid, s)| {
-        let expired = req.max_age.is_some_and(|max| now() - s.auth_time > max);
-        let auth_time = if reauth || expired { now() } else { s.auth_time };
+        let expired = req.max_age.is_some_and(|max| state.now() - s.auth_time > max);
+        let auth_time = if reauth || expired { state.now() } else { s.auth_time };
         (sid, auth_time)
     });
     complete(&state, &tenant, &req, preset.id, claims, access, existing)
@@ -635,7 +635,7 @@ pub async fn par(State(state): State<AppState>, headers: HeaderMap, body: Bytes)
     }
     let id = random_string(32);
     let expires_in = 90;
-    state.store.put(Table::Par, &id, &params, Some(now() + expires_in));
+    state.store.put(Table::Par, &id, &params, Some(state.now() + expires_in));
     (
         StatusCode::CREATED,
         no_store(),

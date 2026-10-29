@@ -69,6 +69,10 @@ pub struct ServerArgs {
     /// When to issue refresh tokens.
     #[arg(long, value_enum, global = true)]
     pub refresh_tokens: Option<RefreshPolicy>,
+    /// Run the clock ahead (or, if negative, behind) real time, e.g. 31d, -5m, 3600. Shifts token
+    /// timestamps and every expiry check. Can be changed at runtime with /dev/api/clock.
+    #[arg(long, env = "LOCALOIDC_CLOCK_OFFSET", global = true, allow_hyphen_values = true, value_parser = crate::util::parse_duration)]
+    pub clock_offset: Option<i64>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -171,6 +175,8 @@ pub struct Config {
     pub clients: Vec<Client>,
     /// Named identities from `[[users]]`.
     pub users: Vec<User>,
+    /// Initial clock offset in seconds (see `crate::clock`).
+    pub clock_offset: i64,
 }
 
 impl Default for Config {
@@ -194,6 +200,7 @@ impl Default for Config {
             claims_by_scope: false,
             clients: vec![],
             users: vec![],
+            clock_offset: 0,
         }
     }
 }
@@ -251,6 +258,7 @@ impl Config {
             claims_by_scope: file.claims_by_scope.unwrap_or(false),
             clients: file.clients,
             users: file.users,
+            clock_offset: args.clock_offset.unwrap_or(0),
         })
     }
 

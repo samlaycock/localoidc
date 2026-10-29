@@ -7,7 +7,7 @@ use crate::presets;
 use crate::state::{AppState, Grant, OpaqueToken};
 use crate::store::Table;
 use crate::tenant::Tenant;
-use crate::util::{half_hash, has_scope, now, random_string};
+use crate::util::{half_hash, has_scope, random_string};
 
 /// Claims managed by the server (stripped when reconstructing an identity from a token).
 pub const REGISTERED: &[&str] = &[
@@ -128,7 +128,7 @@ fn preset_access_claims(preset: &str, grant: &Grant) -> Map<String, Value> {
 
 pub fn access_token(state: &AppState, tenant: &Tenant, grant: &Grant, ttl: Option<i64>) -> (String, i64) {
     let ttl = ttl.unwrap_or(state.config.access_token_ttl);
-    let iat = now();
+    let iat = state.now();
     let exp = iat + ttl;
     let preset = presets::get_or_generic(&grant.preset);
 
@@ -177,7 +177,7 @@ pub fn id_token(
     include_nonce: bool,
     ttl: Option<i64>,
 ) -> String {
-    let iat = now();
+    let iat = state.now();
     let preset = presets::get_or_generic(&grant.preset);
     let mut c = Map::new();
     c.insert("iss".into(), json!(tenant.issuer));
@@ -219,7 +219,7 @@ pub fn id_token(
 }
 
 pub fn refresh_token(state: &AppState, tenant: &Tenant, grant: &Grant) -> String {
-    let iat = now();
+    let iat = state.now();
     let claims = json!({
         "iss": tenant.issuer,
         "sub": grant.sub(),
@@ -262,7 +262,7 @@ pub struct Verified {
 
 /// Validate one of our tokens (JWT or opaque): signature, expiry and revocation.
 pub fn verify(state: &AppState, token: &str) -> Option<Verified> {
-    let t = now();
+    let t = state.now();
     if let Some(o) = state.store.get::<OpaqueToken>(Table::Opaque, token) {
         let mut claims = o.grant.claims.clone();
         claims.insert("client_id".into(), json!(o.grant.client_id));

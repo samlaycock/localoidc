@@ -11,6 +11,7 @@
   --code-ink: #e2e8f0;
   --danger: #dc2626;
   --ok: #16a34a;
+  --warn: #d97706;
   --radius: 12px;
   color-scheme: light;
 }
@@ -57,6 +58,13 @@ a { color: var(--accent); }
   color: var(--cv); background: color-mix(in srgb, var(--cv) 14%, transparent); border: 1px solid color-mix(in srgb, var(--cv) 40%, transparent);
 }
 
+.clock-banner {
+  padding: 8px 28px; font-size: 13px; text-align: center;
+  background: color-mix(in srgb, var(--warn) 14%, var(--card)); border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.clock-banner b { color: var(--warn); }
+.clock-actions { align-items: center; }
+.clock-actions input { width: 120px; }
 main { max-width: 1240px; margin: 0 auto; padding: 28px; display: grid; gap: 20px; }
 .layout { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; gap: 20px; align-items: start; }
 .layout.dev { grid-template-columns: 1fr; }

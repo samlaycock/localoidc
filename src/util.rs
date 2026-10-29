@@ -20,8 +20,61 @@ pub fn b64_std_decode(s: &str) -> Option<Vec<u8>> {
     STANDARD.decode(s.trim()).ok()
 }
 
-pub fn now() -> i64 {
+/// Real time in Unix seconds. Anything that should follow the simulated clock (token
+/// timestamps, expiry checks) uses `AppState::now()` instead.
+pub fn wall_clock() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or_default()
+}
+
+const UNITS: [(char, i64); 5] = [('w', 604_800), ('d', 86_400), ('h', 3_600), ('m', 60), ('s', 1)];
+
+/// Parse a duration in seconds: `90`, `90s`, `15m`, `2h`, `31d`, `1w` or combinations such as
+/// `1d12h`. A leading `-` makes it negative.
+pub fn parse_duration(raw: &str) -> Result<i64, String> {
+    let raw = raw.trim();
+    let (sign, body) = match raw.strip_prefix('-') {
+        Some(rest) => (-1, rest),
+        None => (1, raw.strip_prefix('+').unwrap_or(raw)),
+    };
+    let invalid = || format!("invalid duration '{raw}' (use seconds, or e.g. 15m, 2h, 31d, 1d12h)");
+    if !body.starts_with(|c: char| c.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    if let Ok(secs) = body.parse::<i64>() {
+        return Ok(sign * secs);
+    }
+    let (mut total, mut digits) = (0i64, String::new());
+    for c in body.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        let unit = UNITS.iter().find(|(u, _)| *u == c).ok_or_else(invalid)?.1;
+        let n: i64 = digits.parse().map_err(|_| invalid())?;
+        total = n.checked_mul(unit).and_then(|v| total.checked_add(v)).ok_or_else(invalid)?;
+        digits.clear();
+    }
+    if !digits.is_empty() || body.is_empty() {
+        return Err(invalid());
+    }
+    Ok(sign * total)
+}
+
+/// Format seconds the way `parse_duration` reads them, e.g. `+1d2h`, `-15m`, `0s`.
+pub fn format_duration(secs: i64) -> String {
+    if secs == 0 {
+        return "0s".into();
+    }
+    let mut rest = secs.unsigned_abs() as i64;
+    let mut out = String::from(if secs < 0 { "-" } else { "+" });
+    // Days are the largest unit shown: "+31d" reads better than "+4w3d".
+    for (unit, size) in UNITS.into_iter().skip(1) {
+        if rest >= size {
+            out.push_str(&format!("{}{unit}", rest / size));
+            rest %= size;
+        }
+    }
+    out
 }
 
 pub fn random_string(len: usize) -> String {
@@ -90,5 +143,28 @@ pub fn merge_claims(base: &mut serde_json::Map<String, Value>, overrides: &serde
         } else {
             base.insert(k.clone(), v.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations() {
+        assert_eq!(parse_duration("90"), Ok(90));
+        assert_eq!(parse_duration("-90"), Ok(-90));
+        assert_eq!(parse_duration("15m"), Ok(900));
+        assert_eq!(parse_duration("+1d12h"), Ok(129_600));
+        assert_eq!(parse_duration("-31d"), Ok(-2_678_400));
+        assert_eq!(parse_duration("1w"), Ok(604_800));
+        for bad in ["", "d", "5x", "1d5", "--1", "1.5h"] {
+            assert!(parse_duration(bad).is_err(), "{bad}");
+        }
+        assert_eq!(format_duration(0), "0s");
+        assert_eq!(format_duration(129_600), "+1d12h");
+        assert_eq!(format_duration(-61), "-1m1s");
+        assert_eq!(format_duration(31 * 86_400), "+31d");
+        assert_eq!(parse_duration(&format_duration(-2_678_400)), Ok(-2_678_400));
     }
 }

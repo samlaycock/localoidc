@@ -88,6 +88,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Token API (non-standard) | `/dev/api/token` |
 | Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
+| Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
 | Built-in test redirect target | `/callback` |
 | Health check | `/health` |
 
@@ -219,6 +220,27 @@ access_claims = { permissions = ["orders:write"] }  # optional, access token onl
 curl -s -X POST http://localhost:9400/dev/api/rotate-keys
 # {"kid":"…new…","retired_kids":["…old…"],"jwks_uri":"http://localhost:9400/jwks"}
 ```
+
+### Shifting the clock
+
+localoidc can run its clock ahead of (or behind) real time. Use this to test what happens when things expire, without waiting days for it:
+
+- Authorization codes, sessions, refresh tokens and device codes expire by the shifted clock. Move it forward 31 days and refresh tokens return `invalid_grant`, `prompt=none` returns `login_required`, and `/userinfo` rejects old access tokens.
+- `max_age` is checked against it, so moving forward forces a fresh login.
+- New tokens get `iat`, `exp` and `auth_time` from the shifted clock. This simulates an identity provider whose clock is off, which tests your app's clock-skew leeway.
+
+Your app's clock isn't affected, so a token your app already holds still expires on real time. Use short lifetimes (`expires_in`) to test that side.
+
+```sh
+curl -s -X POST http://localhost:9400/dev/api/clock -H 'content-type: application/json' -d '{"advance": "31d"}'
+# {"now":…,"offset":2678400,"offset_text":"+31d","real_now":…}
+curl -s -X POST http://localhost:9400/dev/api/clock -H 'content-type: application/json' -d '{"reset": true}'
+```
+
+- `POST /dev/api/clock` takes exactly one of `offset` (set it), `advance` (move it; negative moves back) or `reset: true`. Durations are seconds or text such as `90s`, `15m`, `2h`, `31d` or `1d12h`. `GET /dev/api/clock` shows the current state.
+- The `/dev` page has the same controls. While the clock is shifted, every page shows a warning banner.
+- `--clock-offset <duration>` (`LOCALOIDC_CLOCK_OFFSET`) sets an offset at startup. It also applies to `localoidc token`, which doesn't see offsets set on a running server through the API.
+- The offset isn't saved, so a restart always goes back to real time. Records that expire while the clock is ahead are purged within a minute. After that, moving the clock back doesn't restore them.
 
 ## Configuration
 

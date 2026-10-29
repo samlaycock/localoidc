@@ -41,6 +41,7 @@ fn issuer_routes() -> Router<AppState> {
         .route("/dev/api/presets", get(dev::api_presets))
         .route("/dev/api/users", get(dev::api_users))
         .route("/dev/api/rotate-keys", post(dev::api_rotate_keys))
+        .route("/dev/api/clock", get(dev::api_clock).post(dev::api_clock_set))
 }
 
 pub fn router(state: AppState) -> Router {

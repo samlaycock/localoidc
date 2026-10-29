@@ -16,7 +16,7 @@ use crate::routes::authorize::{current_session, editor_data};
 use crate::state::{AppState, Grant};
 use crate::tenant::Tenant;
 use crate::tokens::{self, IssueOpts};
-use crate::util::{has_scope, merge_claims, now};
+use crate::util::{has_scope, merge_claims};
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -78,7 +78,7 @@ pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<V
         claims,
         access_claims,
         nonce: req.nonce,
-        auth_time: now(),
+        auth_time: state.now(),
         sid: Some(uuid::Uuid::new_v4().to_string()),
         audience: match req.audience {
             Some(OneOrMany::One(a)) => a.split_whitespace().map(String::from).collect(),
@@ -193,6 +193,72 @@ pub async fn api_rotate_keys(State(state): State<AppState>, tenant: Tenant) -> R
     }
 }
 
+/// A duration as seconds (`3600`) or text (`"1h"`, `"31d"`, `"-5m"`).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum DurationValue {
+    Seconds(i64),
+    Text(String),
+}
+
+impl DurationValue {
+    fn seconds(&self) -> Result<i64, String> {
+        match self {
+            DurationValue::Seconds(s) => Ok(*s),
+            DurationValue::Text(t) => crate::util::parse_duration(t),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClockRequest {
+    /// Set the offset from real time.
+    pub offset: Option<DurationValue>,
+    /// Move the clock by this much (negative moves it back).
+    pub advance: Option<DurationValue>,
+    /// Go back to real time.
+    pub reset: bool,
+}
+
+/// Offsets beyond this are almost certainly typos, and would overflow timestamp arithmetic.
+const MAX_CLOCK_OFFSET: i64 = 100 * 365 * 86_400;
+
+fn clock_json(state: &AppState) -> Value {
+    let offset = state.clock().offset();
+    json!({
+        "now": state.now(),
+        "offset": offset,
+        "offset_text": crate::util::format_duration(offset),
+        "real_now": crate::util::wall_clock(),
+    })
+}
+
+/// Non-standard: the server clock and its offset from real time.
+pub async fn api_clock(State(state): State<AppState>) -> Response {
+    (no_store(), Json(clock_json(&state))).into_response()
+}
+
+/// Non-standard: shift the server clock (`offset`, `advance` or `reset`). Shared by every issuer.
+pub async fn api_clock_set(State(state): State<AppState>, Json(req): Json<ClockRequest>) -> Response {
+    let invalid = |msg: String| OAuthError::invalid_request(msg).into_response();
+    let parse = |v: &DurationValue, field: &str| v.seconds().map_err(|e| format!("{field}: {e}"));
+    let target = match (&req.offset, &req.advance, req.reset) {
+        (Some(v), None, false) => parse(v, "offset"),
+        (None, Some(v), false) => parse(v, "advance").map(|by| state.clock().offset().saturating_add(by)),
+        (None, None, true) => Ok(0),
+        _ => Err("send exactly one of offset, advance or reset".into()),
+    };
+    let offset = match target {
+        Ok(o) if o.abs() <= MAX_CLOCK_OFFSET => o,
+        Ok(_) => return invalid("clock offset must be within 100 years of real time".into()),
+        Err(e) => return invalid(e),
+    };
+    state.clock().set_offset(offset);
+    tracing::info!("clock offset set to {}", crate::util::format_duration(offset));
+    (no_store(), Json(clock_json(&state))).into_response()
+}
+
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
 }
@@ -228,6 +294,16 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
   <div class="actions"><button class="btn primary" id="dev-generate" type="button">Generate tokens</button></div>
 </section>
 <section class="card result" id="dev-result" hidden></section>
+<section class="card" id="clock">
+  <div class="eyebrow">Clock</div>
+  <p class="muted">{clock_status} Shift it to expire refresh tokens, sessions and codes without waiting, or to simulate an identity provider whose clock is off. Scripts can use <code>POST {clock_api}</code>.</p>
+  <div class="actions clock-actions">
+    <input id="dev-clock-amount" value="1h" aria-label="Duration, e.g. 15m, 2h, 31d">
+    <button class="btn" id="dev-clock-advance" type="button">Move forward</button>
+    <button class="btn" id="dev-clock-back" type="button">Move back</button>
+    <button class="btn ghost" id="dev-clock-reset" type="button"{reset_disabled}>Reset to real time</button>
+  </div>
+</section>
 <section class="card">
   <div class="eyebrow">Signing key</div>
   <p class="muted">Tokens are signed with key <code id="dev-kid">{kid}</code>. Rotating creates a new key; the previous {kept} stay in the JWKS so tokens already issued keep verifying. Scripts can use <code>POST {rotate}</code>.</p>
@@ -242,13 +318,23 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
         kid = esc(&state.keys.kid()),
         kept = crate::keys::RETIRED_KEYS_KEPT,
         rotate = esc(&tenant.url("/dev/api/rotate-keys")),
+        clock_status = match state.clock().offset() {
+            0 => "The clock runs on real time.".to_string(),
+            o => format!(
+                "The clock is <b>{}</b> {} real time.",
+                crate::util::format_duration(o),
+                if o > 0 { "ahead of" } else { "behind" }
+            ),
+        },
+        clock_api = esc(&tenant.url("/dev/api/clock")),
+        reset_disabled = if state.clock().offset() == 0 { " disabled" } else { "" },
         data = data_script(&editor_data(
             &state,
             &tenant,
             "dev",
             previous.as_ref(),
             None,
-            json!({ "api": api, "rotateApi": tenant.url("/dev/api/rotate-keys") }),
+            json!({ "api": api, "rotateApi": tenant.url("/dev/api/rotate-keys"), "clockApi": tenant.url("/dev/api/clock") }),
         )),
     );
     (StatusCode::OK, page(&tenant, "Token generator", &body)).into_response()
