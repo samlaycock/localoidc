@@ -36,6 +36,7 @@ impl OAuthError {
 impl IntoResponse for OAuthError {
     fn into_response(self) -> Response {
         let mut resp = (self.status, no_store(), Json(self.body())).into_response();
+        crate::inspector::ErrorNote::attach(&mut resp, self.error, &self.description);
         if self.status == StatusCode::UNAUTHORIZED {
             let challenge = if self.error == "invalid_client" {
                 r#"Basic realm="localoidc""#.to_string()

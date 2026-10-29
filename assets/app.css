@@ -88,6 +88,7 @@ code.big { font-size: 18px; letter-spacing: .1em; }
 code.wrap { word-break: break-all; }
 .chip { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; margin: 0 4px 4px 0; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .chip.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.chip.bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .chip.muted { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
 
 .btn {
@@ -243,3 +244,27 @@ textarea { resize: vertical; min-height: 36px; }
 .save-bar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .save-name { width: 220px; }
 @media (max-width: 700px) { .save-bar { margin-left: 0; width: 100%; } .save-name { flex: 1; width: auto; } }
+
+/* Request inspector */
+.req-toolbar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 16px 0 12px; }
+.req-toolbar #req-client { width: 220px; }
+.req-toolbar .check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.req-spacer { flex: 1; }
+.req-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.req-table th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.req-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+.req-table .chip { margin: 0; }
+.req-row { cursor: pointer; }
+.req-row:hover td, .req-row.open td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.req-row.failed td:first-child { box-shadow: inset 3px 0 var(--danger); }
+.req-error { color: var(--danger); font-weight: 600; }
+.req-issuer { font-size: 11px; padding: 0 6px; margin-right: 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.req-detail td { background: var(--input); padding: 12px 16px; }
+.req-details, .req-params { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.req-details dt, .req-params dt { color: var(--muted); }
+.req-params dt { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.req-details dd, .req-params dd { margin: 0; overflow-wrap: anywhere; }
+.req-params dd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.req-empty { padding: 24px 0; text-align: center; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }

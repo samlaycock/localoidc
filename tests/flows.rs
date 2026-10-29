@@ -1171,3 +1171,96 @@ async fn clock_offset_shifts_issued_timestamps() {
     }
     assert_eq!(get(&app, "/dev/api/clock").await.json()["offset"], 0);
 }
+
+async fn inspected(app: &Router, query: &str) -> Vec<Value> {
+    let res = get(app, &format!("/dev/api/requests{query}")).await.json();
+    res["entries"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn inspector_records_requests_and_why_they_failed() {
+    let app = app();
+    // A bad code, with Basic client authentication.
+    post_form_with(
+        &app,
+        "/token",
+        &[("grant_type", "authorization_code"), ("code", "not-a-real-code-123"), ("redirect_uri", CB)],
+        &[("authorization", "Basic d2ViOnMzY3JldA==")],
+    )
+    .await;
+    // client_secret_post.
+    post_form(
+        &app,
+        "/token",
+        &[("grant_type", "client_credentials"), ("client_id", "svc"), ("client_secret", "hunter2")],
+    )
+    .await;
+    // An error redirected back to the client, a form_post success and an HTML error page.
+    get(&app, &format!("/authorize?client_id=spa&redirect_uri={}&response_type=banana", enc(CB))).await;
+    get(
+        &app,
+        &format!("/authorize?client_id=spa&redirect_uri={}&response_type=id_token&response_mode=form_post&scope=openid&nonce=n&dev_claims=%7B%7D", enc(CB)),
+    )
+    .await;
+    get(&app, "/authorize?client_id=spa&response_type=code").await;
+    // GitHub reports token errors as HTTP 200 with a form-encoded body.
+    post_form(&app, "/p/github/login/oauth/access_token", &[("code", "nope-nope-nope"), ("client_id", "gh")]).await;
+    // A bearer token names its client.
+    let token = get(&app, "/dev/api/token?client_id=cli").await.json()["access_token"].as_str().unwrap().to_string();
+    get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {token}"))]).await;
+    // Never recorded.
+    get(&app, "/assets/app.css").await;
+    get(&app, "/health").await;
+    get(&app, "/p/okta/dev/requests").await;
+
+    let all = inspected(&app, "").await;
+    let by = |endpoint: &str, n: usize| all.iter().filter(|e| e["endpoint"] == endpoint).nth(n).unwrap().clone();
+    assert_eq!(all.len(), 8, "{all:#?}");
+
+    let userinfo = &all[0];
+    assert_eq!((&userinfo["client_id"], &userinfo["outcome"]), (&json!("cli"), &json!("OK")));
+    assert!(
+        userinfo["authorization"].as_str().unwrap().starts_with("Bearer ey")
+            && userinfo["authorization"].as_str().unwrap().ends_with('…')
+    );
+    assert_eq!(all[1]["category"], "dev");
+
+    let github = &all[2];
+    assert_eq!(
+        (&github["issuer"], &github["status"], &github["error"]),
+        (&json!("github"), &json!(200), &json!("invalid_grant"))
+    );
+
+    let page = by("/authorize", 0);
+    assert_eq!((&page["status"], &page["error"]), (&json!(400), &json!("Missing redirect_uri")));
+    assert_eq!(page["error_description"], "The authorization request did not include a redirect_uri.");
+    assert_eq!(by("/authorize", 1)["outcome"], "form_post with id_token");
+    let redirected = by("/authorize", 2);
+    assert_eq!((&redirected["error"], &redirected["redirect"]), (&json!("unsupported_response_type"), &json!(CB)));
+    assert_eq!(redirected["error_description"], "unsupported response_type 'banana'");
+
+    let cc = by("/token", 0);
+    assert_eq!((&cc["client_id"], &cc["outcome"]), (&json!("svc"), &json!("tokens: access_token")));
+    assert_eq!(cc["params"]["client_secret"], "•••");
+    let bad = by("/token", 1);
+    assert_eq!((&bad["client_id"], &bad["authorization"]), (&json!("web"), &json!("Basic web:•••")));
+    assert_eq!((&bad["status"], &bad["error"]), (&json!(400), &json!("invalid_grant")));
+    assert_eq!(bad["error_description"], "authorization code is invalid");
+    assert_eq!(bad["params"]["code"], "not-a-re…");
+
+    // Filters.
+    assert_eq!(inspected(&app, "?client_id=web").await.len(), 1);
+    assert_eq!(inspected(&app, "?errors=true").await.len(), 4);
+    assert_eq!(inspected(&app, &format!("?after={}", bad["id"])).await.len(), 7);
+    assert_eq!(inspected(&app, "?limit=2").await.len(), 2);
+
+    // Clearing keeps the ids going, so pollers using `after` don't miss anything.
+    let res = send(&app, Request::delete("/dev/api/requests").body(Body::empty()).unwrap()).await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    let res = get(&app, "/dev/api/requests").await.json();
+    assert_eq!((res["entries"].as_array().unwrap().len(), res["latest_id"].as_u64()), (0, Some(8)));
+
+    // HTML pages are summarised by their title.
+    start_login(&app, "", "").await;
+    assert_eq!(inspected(&app, "").await[0]["outcome"], "page: Sign in");
+}

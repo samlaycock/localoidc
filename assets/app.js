@@ -491,3 +491,115 @@
     }
   }
 })();
+
+// Request inspector (/dev/requests): polls the API and renders recent requests as a table whose
+// rows expand to show their parameters and, for failures, the reason.
+(function () {
+  'use strict';
+  const root = document.getElementById('lo-requests');
+  if (!root) return;
+  const api = root.dataset.api;
+  const $ = (id) => document.getElementById(id);
+  const h = (tag, attrs = {}, ...children) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v);
+    }
+    for (const c of children.flat()) if (c != null) el.append(c.nodeType ? c : document.createTextNode(c));
+    return el;
+  };
+
+  let entries = []; // newest first
+  let lastId = 0;
+  let paused = false;
+  const expanded = new Set();
+
+  const failed = (e) => e.error || e.status >= 400;
+  const time = (ms) => new Date(ms).toLocaleTimeString([], { hour12: false });
+
+  function visible() {
+    const client = $('req-client').value.trim();
+    const errorsOnly = $('req-errors').checked;
+    const all = $('req-all').checked;
+    return entries.filter((e) => (all || e.category === 'flow')
+      && (!client || (e.client_id || '').includes(client))
+      && (!errorsOnly || failed(e)));
+  }
+
+  function details(e) {
+    const rows = [];
+    const add = (label, value) => { if (value) rows.push(h('dt', {}, label), h('dd', {}, value)); };
+    if (e.error) add('Why', h('span', {}, h('b', { class: 'req-error' }, e.error), e.error_description ? ` — ${e.error_description}` : ''));
+    add('Request', h('code', {}, `${e.method} ${e.path}`));
+    add('Outcome', e.error ? null : e.outcome);
+    add('Redirected to', e.redirect && h('code', {}, e.redirect));
+    add('Authorization', e.authorization && h('code', {}, e.authorization));
+    const params = Object.entries(e.params);
+    add('Parameters', params.length
+      ? h('dl', { class: 'req-params' }, params.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]))
+      : h('span', { class: 'muted' }, 'none'));
+    return h('dl', { class: 'req-details' }, rows);
+  }
+
+  function row(e) {
+    const bad = failed(e);
+    const toggle = () => { expanded.has(e.id) ? expanded.delete(e.id) : expanded.add(e.id); render(); };
+    const tr = h('tr', { class: `req-row${bad ? ' failed' : ''}${expanded.has(e.id) ? ' open' : ''}`, onclick: toggle },
+      h('td', { class: 'mono' }, time(e.at)),
+      h('td', {}, e.method),
+      h('td', { class: 'mono' }, e.issuer !== 'root' ? h('span', { class: 'req-issuer' }, e.issuer) : null, e.endpoint),
+      h('td', { class: 'mono' }, e.client_id || '–'),
+      h('td', {}, bad && e.error ? h('span', { class: 'req-error' }, e.error) : e.outcome),
+      h('td', {}, h('span', { class: `chip ${bad ? 'bad' : 'ok'}` }, String(e.status))),
+      h('td', { class: 'num' }, e.duration_ms ? String(e.duration_ms) : '<1'));
+    return expanded.has(e.id) ? [tr, h('tr', { class: 'req-detail' }, h('td', { colspan: 7 }, details(e)))] : [tr];
+  }
+
+  let rendered = false;
+  function render() {
+    rendered = true;
+    const rows = visible();
+    if (!rows.length) {
+      root.replaceChildren(h('p', { class: 'muted req-empty' }, entries.length
+        ? 'No requests match these filters.'
+        : `No requests yet. Point your app at ${root.dataset.issuer} and they'll show up here.`));
+      return;
+    }
+    const head = ['Time', 'Method', 'Endpoint', 'Client', 'Outcome', 'Status', 'ms'].map((t) => h('th', {}, t));
+    root.replaceChildren(h('table', { class: 'req-table' }, h('thead', {}, h('tr', {}, head)), h('tbody', {}, rows.flatMap(row))));
+  }
+
+  async function poll() {
+    if (!paused) {
+      try {
+        const res = await fetch(`${api}?after=${lastId}`, { cache: 'no-store' });
+        const json = await res.json();
+        // Only re-render on changes: replacing the rows loses clicks and text selections.
+        let changed = !rendered;
+        if (json.latest_id < lastId) { entries = []; lastId = 0; changed = true; } // the server restarted
+        if (json.entries.length) {
+          lastId = json.entries[0].id;
+          entries = json.entries.concat(entries).slice(0, json.capacity);
+          changed = true;
+        }
+        if (changed) render();
+      } catch { /* server unreachable; try again */ }
+    }
+    setTimeout(poll, 1500);
+  }
+
+  for (const id of ['req-client', 'req-errors', 'req-all']) $(id).addEventListener('input', render);
+  $('req-pause').addEventListener('click', (ev) => {
+    paused = !paused;
+    ev.target.textContent = paused ? 'Resume' : 'Pause';
+  });
+  $('req-clear').addEventListener('click', async () => {
+    await fetch(api, { method: 'DELETE' });
+    entries = [];
+    expanded.clear();
+    render();
+  });
+  poll();
+})();

@@ -41,6 +41,7 @@ pub fn page(tenant: &Tenant, title: &str, body: &str) -> Html<String> {
   <a class="brand" href="{p}/"><span class="logo">◎</span> local<b>oidc</b></a>{badge}
   <nav>
     <a href="{p}/dev">Token generator</a>
+    <a href="{p}/dev/requests">Requests</a>
     <a href="{p}/.well-known/openid-configuration">Discovery</a>
     <a href="{p}/jwks">JWKS</a>
   </nav>
@@ -84,7 +85,9 @@ pub fn error_page(tenant: &Tenant, status: StatusCode, title: &str, detail: &str
         esc(title),
         esc(detail)
     );
-    (status, page(tenant, title, &body)).into_response()
+    let mut resp = (status, page(tenant, title, &body)).into_response();
+    crate::inspector::ErrorNote::attach(&mut resp, title, detail);
+    resp
 }
 
 pub fn message_page(tenant: &Tenant, title: &str, detail: &str) -> Response {
