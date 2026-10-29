@@ -2,14 +2,14 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::Json;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::html::{data_script, error_page, esc, form_post, page};
 use crate::keys::{decode_header_unverified, decode_unverified, verify_rs256_with_jwks};
 use crate::presets;
@@ -17,29 +17,19 @@ use crate::state::{AppState, AuthRequest, CodeEntry, Grant, Session};
 use crate::store::Table;
 use crate::tenant::Tenant;
 use crate::tokens;
-use crate::util::{has_scope, merged_params, non_empty, now, parse_claims_object, parse_form, random_string, value_to_string};
+use crate::util::{
+    has_scope, merged_params, non_empty, now, parse_claims_object, parse_form, random_string, value_to_string,
+};
 
 pub const PAR_PREFIX: &str = "urn:ietf:params:oauth:request_uri:";
 
-const RESPONSE_TYPES: &[&str] = &[
-    "code",
-    "id_token",
-    "token",
-    "id_token token",
-    "code id_token",
-    "code token",
-    "code id_token token",
-    "none",
-];
+const RESPONSE_TYPES: &[&str] =
+    &["code", "id_token", "token", "id_token token", "code id_token", "code token", "code id_token token", "none"];
 
 pub fn normalize_response_type(rt: &str) -> String {
     let set: BTreeSet<&str> = rt.split_whitespace().collect();
     // Canonical order: code, id_token, token, none.
-    ["code", "id_token", "token", "none"]
-        .into_iter()
-        .filter(|t| set.contains(t))
-        .collect::<Vec<_>>()
-        .join(" ")
+    ["code", "id_token", "token", "none"].into_iter().filter(|t| set.contains(t)).collect::<Vec<_>>().join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -99,10 +89,8 @@ fn redirect_error(
     error: &str,
     description: &str,
 ) -> Response {
-    let mut params = vec![
-        ("error".to_string(), error.to_string()),
-        ("error_description".to_string(), description.to_string()),
-    ];
+    let mut params =
+        vec![("error".to_string(), error.to_string()), ("error_description".to_string(), description.to_string())];
     if let Some(s) = state_param {
         params.push(("state".into(), s.into()));
     }
@@ -163,7 +151,9 @@ pub async fn handle_authorize(
     // Request objects (RFC 9101). RS256 objects are verified when the client has registered keys;
     // other algorithms, and clients without keys, are accepted unverified.
     if let Some(request) = non_empty(&params, "request") {
-        let (Some(header), Some(Value::Object(payload))) = (decode_header_unverified(&request), decode_unverified(&request)) else {
+        let (Some(header), Some(Value::Object(payload))) =
+            (decode_header_unverified(&request), decode_unverified(&request))
+        else {
             return bad("Invalid request object", "The request object is not a decodable JWT.");
         };
         let inner_client = payload.get("client_id").map(value_to_string);
@@ -174,7 +164,9 @@ pub async fn handle_authorize(
         }
         let alg = header["alg"].as_str().unwrap_or("none");
         let client = non_empty(&params, "client_id").or(inner_client).and_then(|c| state.client(&c));
-        if alg != "none" && let Some(client) = client {
+        if alg != "none"
+            && let Some(client) = client
+        {
             let jwks = match (client.jwks, client.jwks_uri) {
                 (Some(jwks), _) => Some(jwks),
                 (None, Some(uri)) => match crate::fetch::json(&uri).await {
@@ -185,10 +177,16 @@ pub async fn handle_authorize(
             };
             if let Some(jwks) = jwks {
                 if alg != "RS256" {
-                    return bad("Unsupported request object algorithm", &format!("'{alg}' request objects are not supported; use RS256 or none."));
+                    return bad(
+                        "Unsupported request object algorithm",
+                        &format!("'{alg}' request objects are not supported; use RS256 or none."),
+                    );
                 }
                 if verify_rs256_with_jwks(&request, &jwks).is_none() {
-                    return bad("Invalid request object", "The request object signature does not verify against the client's registered keys.");
+                    return bad(
+                        "Invalid request object",
+                        "The request object signature does not verify against the client's registered keys.",
+                    );
                 }
             }
         }
@@ -210,9 +208,11 @@ pub async fn handle_authorize(
     let redirect_uri = match non_empty(&params, "redirect_uri") {
         Some(r) => {
             if let Some(c) = &client
-                && !c.redirect_uris.is_empty() && !c.redirect_uris.contains(&r) {
-                    return bad("Invalid redirect_uri", &format!("'{r}' is not registered for client '{client_id}'."));
-                }
+                && !c.redirect_uris.is_empty()
+                && !c.redirect_uris.contains(&r)
+            {
+                return bad("Invalid redirect_uri", &format!("'{r}' is not registered for client '{client_id}'."));
+            }
             r
         }
         None => match client.as_ref().map(|c| c.redirect_uris.as_slice()) {
@@ -232,7 +232,8 @@ pub async fn handle_authorize(
     let default_mode = if implicitish { "fragment" } else { "query" };
     let mode = params.get("response_mode").cloned().unwrap_or_else(|| default_mode.into());
     let fail = |error: &str, description: &str| {
-        let mode = if ["query", "fragment", "form_post"].contains(&mode.as_str()) { mode.as_str() } else { default_mode };
+        let mode =
+            if ["query", "fragment", "form_post"].contains(&mode.as_str()) { mode.as_str() } else { default_mode };
         redirect_error(tenant, &redirect_uri, mode, state_param.as_deref(), error, description)
     };
 
@@ -256,14 +257,16 @@ pub async fn handle_authorize(
         return fail("invalid_request", "nonce is required for implicit and hybrid flows");
     }
     let code_challenge = non_empty(&params, "code_challenge");
-    let code_challenge_method = code_challenge
-        .as_ref()
-        .map(|_| non_empty(&params, "code_challenge_method").unwrap_or_else(|| "plain".into()));
+    let code_challenge_method =
+        code_challenge.as_ref().map(|_| non_empty(&params, "code_challenge_method").unwrap_or_else(|| "plain".into()));
     if let Some(m) = &code_challenge_method
-        && m != "S256" && m != "plain" {
-            return fail("invalid_request", "code_challenge_method must be S256 or plain");
-        }
-    let prompt: Vec<String> = params.get("prompt").map(|p| p.split_whitespace().map(String::from).collect()).unwrap_or_default();
+        && m != "S256"
+        && m != "plain"
+    {
+        return fail("invalid_request", "code_challenge_method must be S256 or plain");
+    }
+    let prompt: Vec<String> =
+        params.get("prompt").map(|p| p.split_whitespace().map(String::from).collect()).unwrap_or_default();
     if prompt.iter().any(|p| p == "none") && prompt.len() > 1 {
         return fail("invalid_request", "prompt=none cannot be combined with other values");
     }
@@ -326,14 +329,18 @@ pub async fn handle_authorize(
 
     if req.prompt.iter().any(|p| p == "none") {
         return match session {
-            Some((sid, s)) if session_fresh(&s) => complete(state, tenant, &req, &s.preset, s.claims, s.access_claims, Some((sid, s.auth_time))),
+            Some((sid, s)) if session_fresh(&s) => {
+                complete(state, tenant, &req, &s.preset, s.claims, s.access_claims, Some((sid, s.auth_time)))
+            }
             _ => auth_error(tenant, &req, "login_required", "no active session"),
         };
     }
 
     if state.config.auto_login && !force_login {
         return match session {
-            Some((sid, s)) if session_fresh(&s) => complete(state, tenant, &req, &s.preset, s.claims, s.access_claims, Some((sid, s.auth_time))),
+            Some((sid, s)) if session_fresh(&s) => {
+                complete(state, tenant, &req, &s.preset, s.claims, s.access_claims, Some((sid, s.auth_time)))
+            }
             _ => {
                 let mut claims = default_preset.default_claims();
                 if let Some(hint) = &req.login_hint {
@@ -471,11 +478,8 @@ fn render_login(
     client_name: Option<&str>,
     previous: Option<Session>,
 ) -> Response {
-    let scopes: String = req
-        .scope
-        .split_whitespace()
-        .map(|s| format!(r#"<span class="chip">{}</span>"#, esc(s)))
-        .collect();
+    let scopes: String =
+        req.scope.split_whitespace().map(|s| format!(r#"<span class="chip">{}</span>"#, esc(s))).collect();
     let mut details = vec![
         kv("client_id", &code(&req.client_id)),
         kv("redirect_uri", &code(&req.redirect_uri)),
@@ -533,7 +537,8 @@ fn render_login(
         details = details.join(""),
         action = tenant.path("/login"),
         req_id = esc(&req.id),
-        data = data_script(&editor_data(state, tenant, "login", previous.as_ref(), req.login_hint.as_deref(), json!({}))),
+        data =
+            data_script(&editor_data(state, tenant, "login", previous.as_ref(), req.login_hint.as_deref(), json!({}))),
     );
     page(tenant, "Sign in", &body).into_response()
 }
@@ -542,7 +547,10 @@ fn render_login(
 pub type Submission = (&'static presets::Preset, Map<String, Value>, Map<String, Value>);
 
 /// Parse the claim editor's hidden fields.
-pub fn editor_submission(form: &HashMap<String, String>, fallback_preset: &'static presets::Preset) -> Result<Submission, String> {
+pub fn editor_submission(
+    form: &HashMap<String, String>,
+    fallback_preset: &'static presets::Preset,
+) -> Result<Submission, String> {
     let preset = form.get("preset").and_then(|p| presets::get(p)).unwrap_or(fallback_preset);
     let mut claims = match form.get("claims").filter(|c| !c.trim().is_empty()) {
         Some(raw) => parse_claims_object(raw).map_err(|e| format!("claims: {e}"))?,

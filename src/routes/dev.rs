@@ -1,14 +1,14 @@
 //! Non-standard developer endpoints: a token generator page and JSON API.
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::html::{data_script, esc, page};
 use crate::keys::decode_unverified;
 use crate::presets;
@@ -94,7 +94,11 @@ pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<V
     Ok(out)
 }
 
-pub async fn api_token_post(State(state): State<AppState>, tenant: Tenant, Json(req): Json<DevTokenRequest>) -> Response {
+pub async fn api_token_post(
+    State(state): State<AppState>,
+    tenant: Tenant,
+    Json(req): Json<DevTokenRequest>,
+) -> Response {
     match mint(&state, &tenant, req) {
         Ok(v) => (no_store(), Json(v)).into_response(),
         Err(e) => e.into_response(),
@@ -109,7 +113,9 @@ pub async fn api_token_get(
 ) -> Response {
     let mut req = DevTokenRequest::default();
     for (k, v) in q {
-        let parse_json = |raw: &str| crate::util::parse_claims_object(raw).map_err(|e| OAuthError::invalid_request(format!("{k}: {e}")));
+        let parse_json = |raw: &str| {
+            crate::util::parse_claims_object(raw).map_err(|e| OAuthError::invalid_request(format!("{k}: {e}")))
+        };
         match k.as_str() {
             "preset" => req.preset = Some(v),
             "client_id" => req.client_id = Some(v),
@@ -159,8 +165,14 @@ pub async fn api_rotate_keys(State(state): State<AppState>, tenant: Tenant) -> R
             })),
         )
             .into_response(),
-        Ok(Err(e)) => OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation failed: {e:#}")).into_response(),
-        Err(e) => OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation panicked: {e}")).into_response(),
+        Ok(Err(e)) => {
+            OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation failed: {e:#}"))
+                .into_response()
+        }
+        Err(e) => {
+            OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation panicked: {e}"))
+                .into_response()
+        }
     }
 }
 

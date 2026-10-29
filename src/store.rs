@@ -5,9 +5,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Context;
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::de::DeserializeOwned;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::util::now;
 
@@ -114,7 +114,10 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let json: Option<String> = log(
             conn.query_row(
-                &format!("SELECT value FROM {} WHERE key = ?1 AND (expires_at IS NULL OR expires_at > ?2)", table.name()),
+                &format!(
+                    "SELECT value FROM {} WHERE key = ?1 AND (expires_at IS NULL OR expires_at > ?2)",
+                    table.name()
+                ),
                 params![key, now()],
                 |r| r.get(0),
             )
@@ -161,12 +164,10 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let rows = conn
             .prepare(&format!("SELECT value FROM {} WHERE expires_at IS NULL OR expires_at > ?1", table.name()))
-            .and_then(|mut stmt| stmt.query_map(params![now()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>());
-        log(rows, "select", table)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|j| serde_json::from_str(j).ok())
-            .collect()
+            .and_then(|mut stmt| {
+                stmt.query_map(params![now()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()
+            });
+        log(rows, "select", table).unwrap_or_default().iter().filter_map(|j| serde_json::from_str(j).ok()).collect()
     }
 
     /// Read-modify-write a record (expired or not) in one transaction. Returns `None` if missing.
@@ -200,7 +201,10 @@ impl Store {
         let t = now();
         for table in Table::ALL {
             log(
-                conn.execute(&format!("DELETE FROM {} WHERE expires_at IS NOT NULL AND expires_at <= ?1", table.name()), params![t]),
+                conn.execute(
+                    &format!("DELETE FROM {} WHERE expires_at IS NOT NULL AND expires_at <= ?1", table.name()),
+                    params![t],
+                ),
                 "purge",
                 table,
             );

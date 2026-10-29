@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::state::{AppState, Grant};
 use crate::tenant::Tenant;
 use crate::tokens::{self, Kind};
@@ -29,7 +29,11 @@ pub fn bearer(headers: &HeaderMap, params: &HashMap<String, String>) -> Option<S
 }
 
 /// Resolve the grant behind an access token presented to a resource endpoint.
-pub fn authorize_bearer(state: &AppState, headers: &HeaderMap, params: &HashMap<String, String>) -> Result<Grant, OAuthError> {
+pub fn authorize_bearer(
+    state: &AppState,
+    headers: &HeaderMap,
+    params: &HashMap<String, String>,
+) -> Result<Grant, OAuthError> {
     let token = bearer(headers, params).ok_or_else(|| OAuthError::invalid_token("missing access token"))?;
     let verified = tokens::verify(state, &token)
         .filter(|v| v.kind == Kind::Access)
@@ -50,10 +54,8 @@ pub async fn userinfo(
         Err(e) => return e.into_response(),
     };
     let mut claims = tokens::userinfo_claims(&state, &grant);
-    let signed = state
-        .client(&grant.client_id)
-        .and_then(|c| c.userinfo_signed_response_alg)
-        .is_some_and(|alg| alg == "RS256");
+    let signed =
+        state.client(&grant.client_id).and_then(|c| c.userinfo_signed_response_alg).is_some_and(|alg| alg == "RS256");
     if signed {
         // OIDC Core 5.3.2: signed responses carry iss and aud.
         claims.insert("iss".into(), json!(tenant.issuer));

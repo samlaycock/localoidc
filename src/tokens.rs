@@ -1,6 +1,6 @@
 //! Token issuance and verification.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::config::RefreshPolicy;
 use crate::presets;
@@ -11,8 +11,23 @@ use crate::util::{half_hash, has_scope, now, random_string};
 
 /// Claims managed by the server (stripped when reconstructing an identity from a token).
 pub const REGISTERED: &[&str] = &[
-    "iss", "aud", "exp", "iat", "nbf", "jti", "azp", "auth_time", "nonce", "sid", "at_hash", "c_hash", "s_hash",
-    "client_id", "scope", "acr", "grant",
+    "iss",
+    "aud",
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "azp",
+    "auth_time",
+    "nonce",
+    "sid",
+    "at_hash",
+    "c_hash",
+    "s_hash",
+    "client_id",
+    "scope",
+    "acr",
+    "grant",
 ];
 
 #[derive(Default)]
@@ -62,9 +77,8 @@ pub fn wants_refresh(state: &AppState, scope: &str) -> bool {
 
 pub fn issue(state: &AppState, tenant: &Tenant, grant: &Grant, opts: &IssueOpts) -> Issued {
     let (access_token, expires_in) = access_token(state, tenant, grant, opts.ttl);
-    let id_token = opts
-        .id_token
-        .then(|| id_token(state, tenant, grant, Some(&access_token), None, opts.include_nonce, opts.ttl));
+    let id_token =
+        opts.id_token.then(|| id_token(state, tenant, grant, Some(&access_token), None, opts.include_nonce, opts.ttl));
     let refresh_token = opts.refresh_token.then(|| refresh_token(state, tenant, grant));
     Issued { access_token, expires_in, id_token, refresh_token, scope: grant.scope.clone() }
 }
@@ -175,10 +189,9 @@ pub fn id_token(
     if grant.auth_time > 0 {
         c.insert("auth_time".into(), json!(grant.auth_time));
     }
-    if include_nonce
-        && let Some(nonce) = &grant.nonce {
-            c.insert("nonce".into(), json!(nonce));
-        }
+    if include_nonce && let Some(nonce) = &grant.nonce {
+        c.insert("nonce".into(), json!(nonce));
+    }
     if let Some(sid) = &grant.sid {
         c.insert("sid".into(), json!(sid));
     }
@@ -265,9 +278,10 @@ pub fn verify(state: &AppState, token: &str) -> Option<Verified> {
     }
     let jti = claims.get("jti").and_then(Value::as_str).map(String::from);
     if let Some(jti) = &jti
-        && state.store.contains(Table::Revoked, jti) {
-            return None;
-        }
+        && state.store.contains(Table::Revoked, jti)
+    {
+        return None;
+    }
     let kind = match header["typ"].as_str() {
         Some("at+jwt") => Kind::Access,
         Some("rt+jwt") => Kind::Refresh,
@@ -308,11 +322,8 @@ pub fn grant_from_claims(claims: &Map<String, Value>) -> Grant {
             v => crate::util::value_to_string(v),
         })
         .unwrap_or_default();
-    let identity = claims
-        .iter()
-        .filter(|(k, _)| !REGISTERED.contains(&k.as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let identity =
+        claims.iter().filter(|(k, _)| !REGISTERED.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
     Grant {
         client_id,
         scope: claims.get("scope").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -333,8 +344,20 @@ const SCOPE_CLAIMS: &[(&str, &[&str])] = &[
     (
         "profile",
         &[
-            "name", "family_name", "given_name", "middle_name", "nickname", "preferred_username", "profile", "picture",
-            "website", "gender", "birthdate", "zoneinfo", "locale", "updated_at",
+            "name",
+            "family_name",
+            "given_name",
+            "middle_name",
+            "nickname",
+            "preferred_username",
+            "profile",
+            "picture",
+            "website",
+            "gender",
+            "birthdate",
+            "zoneinfo",
+            "locale",
+            "updated_at",
         ],
     ),
     ("email", &["email", "email_verified"]),

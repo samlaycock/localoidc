@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Field {
@@ -305,7 +305,11 @@ fn build() -> Vec<Preset> {
             id_token_extra: json!({ "nonce_supported": true }),
             access_token_extra: json!({}),
             default_scope: "openid name email",
-            endpoints: vec![("GET authorize", "/auth/authorize"), ("POST token", "/auth/token"), ("GET keys", "/auth/keys")],
+            endpoints: vec![
+                ("GET authorize", "/auth/authorize"),
+                ("POST token", "/auth/token"),
+                ("GET keys", "/auth/keys"),
+            ],
         },
         Preset {
             id: "auth0",
@@ -317,7 +321,11 @@ fn build() -> Vec<Preset> {
                 s("sub", "Subject (sub)", "auth0|64f1c0ffee0000000000abcd"),
                 s("nickname", "Nickname", "jane"),
                 s("name", "Name", NAME),
-                s("picture", "Picture URL", "https://s.gravatar.com/avatar/00000000000000000000000000000000?s=480&r=pg&d=identicon"),
+                s(
+                    "picture",
+                    "Picture URL",
+                    "https://s.gravatar.com/avatar/00000000000000000000000000000000?s=480&r=pg&d=identicon",
+                ),
                 s("email", "Email", "jane@example.com"),
                 b("email_verified", "Email verified", true),
                 s("updated_at", "Updated at", "2026-01-01T00:00:00.000Z"),
@@ -370,8 +378,16 @@ fn build() -> Vec<Preset> {
                 s("family_name", "Family name", "Developer"),
                 s("email", "Email", "jane@example.com"),
                 b("email_verified", "Email verified", true),
-                j("realm_access", "Realm roles", json!({ "roles": ["default-roles-master", "offline_access", "uma_authorization"] })),
-                j("resource_access", "Client roles", json!({ "account": { "roles": ["manage-account", "view-profile"] } })),
+                j(
+                    "realm_access",
+                    "Realm roles",
+                    json!({ "roles": ["default-roles-master", "offline_access", "uma_authorization"] }),
+                ),
+                j(
+                    "resource_access",
+                    "Client roles",
+                    json!({ "account": { "roles": ["manage-account", "view-profile"] } }),
+                ),
             ],
             sub_from: None,
             access_token_prefix: None,

@@ -2,7 +2,7 @@
 
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde_json::Value;
 
@@ -27,7 +27,9 @@ pub async fn end_session(
     // should accept expired ID tokens as hints).
     let hint = match non_empty(&params, "id_token_hint") {
         Some(token) => match state.keys.verify(&token) {
-            Some((_, Value::Object(claims))) if claims.get("iss").and_then(Value::as_str) == Some(tenant.issuer.as_str()) => {
+            Some((_, Value::Object(claims)))
+                if claims.get("iss").and_then(Value::as_str) == Some(tenant.issuer.as_str()) =>
+            {
                 Some(claims)
             }
             _ => return bad("id_token_hint could not be validated: it was not issued by this server."),
@@ -53,7 +55,8 @@ pub async fn end_session(
                     if hint.is_none() {
                         return bad("post_logout_redirect_uri can only be used together with id_token_hint.");
                     }
-                    if !client.post_logout_redirect_uris.is_empty() && !client.post_logout_redirect_uris.contains(&uri) {
+                    if !client.post_logout_redirect_uris.is_empty() && !client.post_logout_redirect_uris.contains(&uri)
+                    {
                         return bad(&format!("post_logout_redirect_uri '{uri}' is not registered for this client."));
                     }
                 }

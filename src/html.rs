@@ -22,11 +22,9 @@ pub fn esc(s: &str) -> String {
 pub fn page(tenant: &Tenant, title: &str, body: &str) -> Html<String> {
     let p = &tenant.prefix;
     let badge = match tenant.preset {
-        Some(preset) => format!(
-            r#"<span class="tenant-badge" style="--c:{}">emulating {}</span>"#,
-            preset.color,
-            esc(preset.name)
-        ),
+        Some(preset) => {
+            format!(r#"<span class="tenant-badge" style="--c:{}">emulating {}</span>"#, preset.color, esc(preset.name))
+        }
         None => String::new(),
     };
     Html(format!(
@@ -59,10 +57,7 @@ pub fn page(tenant: &Tenant, title: &str, body: &str) -> Html<String> {
 
 /// Embed JSON for the page script.
 pub fn data_script(v: &Value) -> String {
-    format!(
-        r#"<script type="application/json" id="lo-data">{}</script>"#,
-        v.to_string().replace("</", "<\\/")
-    )
+    format!(r#"<script type="application/json" id="lo-data">{}</script>"#, v.to_string().replace("</", "<\\/"))
 }
 
 pub fn error_page(tenant: &Tenant, status: StatusCode, title: &str, detail: &str) -> Response {
@@ -86,10 +81,8 @@ pub fn message_page(tenant: &Tenant, title: &str, detail: &str) -> Response {
 
 /// Auto-submitting form for `response_mode=form_post`.
 pub fn form_post(action: &str, params: &[(String, String)]) -> Html<String> {
-    let inputs: String = params
-        .iter()
-        .map(|(k, v)| format!(r#"<input type="hidden" name="{}" value="{}">"#, esc(k), esc(v)))
-        .collect();
+    let inputs: String =
+        params.iter().map(|(k, v)| format!(r#"<input type="hidden" name="{}" value="{}">"#, esc(k), esc(v))).collect();
     Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Submitting…</title></head>
 <body onload="document.forms[0].submit()"><form method="post" action="{}">{inputs}

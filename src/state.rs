@@ -102,7 +102,8 @@ impl RequestedClaims {
     /// Parse the names out of a `claims` request parameter; invalid JSON is an error.
     pub fn parse(raw: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(raw).map_err(|e| format!("claims parameter is not valid JSON: {e}"))?;
-        let names = |key: &str| v.get(key).and_then(Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+        let names =
+            |key: &str| v.get(key).and_then(Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default();
         Ok(Self { id_token: names("id_token"), userinfo: names("userinfo") })
     }
 }

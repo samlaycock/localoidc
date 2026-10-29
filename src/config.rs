@@ -215,9 +215,11 @@ impl Config {
         if crate::presets::get(&default_preset).is_none() {
             anyhow::bail!("unknown default preset '{default_preset}'");
         }
-        let data_dir = args.data_dir.clone().or(file.data_dir).or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".localoidc"))
-        });
+        let data_dir = args
+            .data_dir
+            .clone()
+            .or(file.data_dir)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".localoidc")));
 
         Ok(Self {
             host: args.host.clone().or(file.host).unwrap_or(d.host),

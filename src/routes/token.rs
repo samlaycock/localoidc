@@ -3,21 +3,23 @@
 
 use std::collections::HashMap;
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::keys::decode_unverified;
 use crate::presets;
 use crate::state::{AppState, CodeEntry, DeviceEntry, DeviceStatus, Grant};
 use crate::store::Table;
 use crate::tenant::Tenant;
 use crate::tokens::{self, IssueOpts, Kind};
-use crate::util::{b64_std_decode, has_scope, merged_params, non_empty, now, parse_claims_object, sha256_b64, value_to_string};
+use crate::util::{
+    b64_std_decode, has_scope, merged_params, non_empty, now, parse_claims_object, sha256_b64, value_to_string,
+};
 
 pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const TOKEN_EXCHANGE_GRANT: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
@@ -39,7 +41,8 @@ pub fn authenticate_client(
             .and_then(|b| String::from_utf8(b).ok())
             .ok_or_else(|| OAuthError::invalid_client("malformed Basic authorization header"))?;
         let (u, p) = decoded.split_once(':').unwrap_or((&decoded, ""));
-        let decode = |s: &str| url::form_urlencoded::parse(format!("x={s}").as_bytes()).next().map(|(_, v)| v.into_owned());
+        let decode =
+            |s: &str| url::form_urlencoded::parse(format!("x={s}").as_bytes()).next().map(|(_, v)| v.into_owned());
         id = decode(u);
         secret = decode(p);
     }
@@ -50,17 +53,20 @@ pub fn authenticate_client(
     // private_key_jwt / client_secret_jwt: accepted without verifying the assertion.
     let assertion = non_empty(params, "client_assertion");
     if id.is_none()
-        && let Some(Value::Object(claims)) = assertion.as_deref().and_then(decode_unverified) {
-            id = claims.get("iss").or_else(|| claims.get("sub")).map(value_to_string);
-        }
+        && let Some(Value::Object(claims)) = assertion.as_deref().and_then(decode_unverified)
+    {
+        id = claims.get("iss").or_else(|| claims.get("sub")).map(value_to_string);
+    }
     let Some(id) = id else { return Ok(None) };
 
     match state.client(&id) {
         Some(client) => {
             if let Some(expected) = client.client_secret.filter(|s| !s.is_empty())
-                && assertion.is_none() && secret.as_deref() != Some(expected.as_str()) {
-                    return Err(OAuthError::invalid_client("client authentication failed"));
-                }
+                && assertion.is_none()
+                && secret.as_deref() != Some(expected.as_str())
+            {
+                return Err(OAuthError::invalid_client("client authentication failed"));
+            }
         }
         None if state.config.strict_clients => {
             return Err(OAuthError::invalid_client(format!("unknown client '{id}'")));
@@ -92,7 +98,8 @@ pub fn handle_token(
 ) -> Result<Value, OAuthError> {
     let client_id = authenticate_client(state, headers, params)?;
     // GitHub and Facebook omit grant_type on code exchange.
-    let grant_type = non_empty(params, "grant_type").or_else(|| params.contains_key("code").then(|| "authorization_code".into()));
+    let grant_type =
+        non_empty(params, "grant_type").or_else(|| params.contains_key("code").then(|| "authorization_code".into()));
     match grant_type.as_deref() {
         Some("authorization_code") => authorization_code(state, tenant, client_id, params),
         Some("refresh_token") => refresh(state, tenant, client_id, params),
@@ -153,7 +160,9 @@ fn authorization_code(
             tokens::revoke(state, token);
         }
         state.store.remove(Table::Codes, &code);
-        return Err(OAuthError::invalid_grant("authorization code has already been used; tokens issued from it were revoked"));
+        return Err(OAuthError::invalid_grant(
+            "authorization code has already been used; tokens issued from it were revoked",
+        ));
     }
     if entry.exp <= now() {
         return Err(OAuthError::invalid_grant("authorization code has expired"));
@@ -168,7 +177,8 @@ fn authorization_code(
         return Err(OAuthError::invalid_grant("redirect_uri does not match the authorization request"));
     }
     if let Some(challenge) = &entry.code_challenge {
-        let verifier = non_empty(params, "code_verifier").ok_or_else(|| OAuthError::invalid_grant("code_verifier is required"))?;
+        let verifier =
+            non_empty(params, "code_verifier").ok_or_else(|| OAuthError::invalid_grant("code_verifier is required"))?;
         let computed = match entry.code_challenge_method.as_deref() {
             Some("S256") => sha256_b64(&verifier),
             _ => verifier,
@@ -179,7 +189,8 @@ fn authorization_code(
     }
     let grant = entry.grant;
     let issued = tokens::issue(state, tenant, &grant, &opts_for(state, &grant));
-    let tokens: Vec<String> = std::iter::once(issued.access_token.clone()).chain(issued.refresh_token.clone()).collect();
+    let tokens: Vec<String> =
+        std::iter::once(issued.access_token.clone()).chain(issued.refresh_token.clone()).collect();
     state.store.update(Table::Codes, &code, |e: &mut CodeEntry| e.issued = tokens);
     Ok(issued.to_json())
 }
@@ -200,7 +211,11 @@ fn refresh(
     }
     if let Some(requested) = non_empty(params, "scope") {
         if let Some(extra) = requested.split_whitespace().find(|s| !has_scope(&grant.scope, s)) {
-            return Err(OAuthError::new(StatusCode::BAD_REQUEST, "invalid_scope", format!("scope '{extra}' was not originally granted")));
+            return Err(OAuthError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_scope",
+                format!("scope '{extra}' was not originally granted"),
+            ));
         }
         grant.scope = requested;
     }

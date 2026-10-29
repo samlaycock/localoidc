@@ -6,9 +6,9 @@ use serde_json::{Map, Value};
 use tracing_subscriber::EnvFilter;
 
 use localoidc::config::{Cli, Command, Config, TokenArgs, TokenFormat};
-use localoidc::routes::dev::{mint, DevTokenRequest, OneOrMany};
+use localoidc::routes::dev::{DevTokenRequest, OneOrMany, mint};
 use localoidc::tenant::Tenant;
-use localoidc::{load_keys, presets, router, AppState};
+use localoidc::{AppState, load_keys, presets, router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,7 +54,10 @@ async fn serve(args: &localoidc::config::ServerArgs) -> anyhow::Result<()> {
     }
     tracing::info!("discovery:       {issuer}/.well-known/openid-configuration");
     tracing::info!("token generator: {issuer}/dev");
-    tracing::info!("provider issuers: {issuer}/p/<{}>", presets::all().iter().map(|p| p.id).collect::<Vec<_>>().join("|"));
+    tracing::info!(
+        "provider issuers: {issuer}/p/<{}>",
+        presets::all().iter().map(|p| p.id).collect::<Vec<_>>().join("|")
+    );
     axum::serve(listener, router(state))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

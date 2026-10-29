@@ -21,18 +21,11 @@ pub fn b64_std_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 pub fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default()
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or_default()
 }
 
 pub fn random_string(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(len)
-        .map(char::from)
-        .collect()
+    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
 pub fn sha256_b64(input: &str) -> String {
@@ -78,12 +71,11 @@ pub fn parse_claims_object(raw: &str) -> Result<serde_json::Map<String, Value>, 
     if raw.is_empty() {
         return Ok(Default::default());
     }
-    let parsed: Value = serde_json::from_str(raw)
-        .or_else(|e| {
-            b64_decode(raw)
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .ok_or_else(|| format!("invalid JSON: {e}"))
-        })?;
+    let parsed: Value = serde_json::from_str(raw).or_else(|e| {
+        b64_decode(raw)
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(|| format!("invalid JSON: {e}"))
+    })?;
     match parsed {
         Value::Object(map) => Ok(map),
         _ => Err("claims must be a JSON object".into()),

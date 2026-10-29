@@ -1,17 +1,17 @@
 use std::sync::{Arc, OnceLock};
 
-use axum::body::Body;
-use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::Router;
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use localoidc::config::Config;
-use localoidc::keys::{decode_unverified, Keys};
+use localoidc::keys::{Keys, decode_unverified};
 use localoidc::state::Client;
 use localoidc::util::sha256_b64;
-use localoidc::{router, AppState};
+use localoidc::{AppState, router};
 
 const ISS: &str = "http://localhost:9400";
 const CB: &str = "http://app.test/cb";
@@ -156,11 +156,27 @@ async fn authorization_code_flow_with_pkce_refresh_introspect_revoke() {
     let code = query_param(&loc, "code").unwrap();
 
     // Wrong verifier fails (and burns the code).
-    let bad = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("code_verifier", "nope"), ("client_id", "web")]).await;
+    let bad = post_form(
+        &app,
+        "/token",
+        &[("grant_type", "authorization_code"), ("code", &code), ("code_verifier", "nope"), ("client_id", "web")],
+    )
+    .await;
     assert_eq!(bad.json()["error"], "invalid_grant");
 
     let req = start_login(&app, "", &format!("&code_challenge={challenge}&code_challenge_method=S256")).await;
-    let res = post_form(&app, "/login", &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", &submitted.to_string()), ("access_claims", r#"{"permissions":["orders:write"]}"#)]).await;
+    let res = post_form(
+        &app,
+        "/login",
+        &[
+            ("req", &req),
+            ("action", "approve"),
+            ("preset", "generic"),
+            ("claims", &submitted.to_string()),
+            ("access_claims", r#"{"permissions":["orders:write"]}"#),
+        ],
+    )
+    .await;
     let code = query_param(&res.location(), "code").unwrap();
     let form = [
         ("grant_type", "authorization_code"),
@@ -195,10 +211,19 @@ async fn authorization_code_flow_with_pkce_refresh_introspect_revoke() {
     assert_eq!(ui["https://example.com/tenant"], "acme");
 
     let rt = tok["refresh_token"].as_str().unwrap();
-    let refreshed = post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt), ("client_id", "web"), ("scope", "openid email")]).await.json();
+    let refreshed = post_form(
+        &app,
+        "/token",
+        &[("grant_type", "refresh_token"), ("refresh_token", rt), ("client_id", "web"), ("scope", "openid email")],
+    )
+    .await
+    .json();
     assert_eq!(refreshed["scope"], "openid email");
     assert_eq!(claims(refreshed["id_token"].as_str().unwrap())["email"], "dev@example.com");
-    let widened = post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt), ("scope", "openid admin")]).await.json();
+    let widened =
+        post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt), ("scope", "openid admin")])
+            .await
+            .json();
     assert_eq!(widened["error"], "invalid_scope");
 
     let intro = post_form(&app, "/introspect", &[("token", at)]).await.json();
@@ -232,7 +257,9 @@ async fn implicit_form_post_and_validation_errors() {
     assert!(res.body.contains(&format!(r#"action="{CB}""#)));
 
     // Missing nonce on implicit flow.
-    let res = get(&app, &format!("/authorize?client_id=spa&redirect_uri={}&response_type=id_token&scope=openid", enc(CB))).await;
+    let res =
+        get(&app, &format!("/authorize?client_id=spa&redirect_uri={}&response_type=id_token&scope=openid", enc(CB)))
+            .await;
     let frag = res.location().fragment().unwrap().to_string();
     assert!(frag.contains("error=invalid_request"), "{frag}");
 
@@ -266,13 +293,23 @@ async fn prompt_none_uses_session() {
     assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
 
     let req = start_login(&app, "", "").await;
-    let login = post_form(&app, "/login", &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"s1"}"#)]).await;
+    let login = post_form(
+        &app,
+        "/login",
+        &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"s1"}"#)],
+    )
+    .await;
     let cookie = login.cookie();
     let res = get_with(&app, &uri, &[("cookie", &cookie)]).await;
     assert!(query_param(&res.location(), "code").is_some(), "{}", res.location());
 
     // Logout clears it.
-    let out = get_with(&app, &format!("/end_session?client_id=web&post_logout_redirect_uri={}&state=bye", enc(CB)), &[("cookie", &cookie)]).await;
+    let out = get_with(
+        &app,
+        &format!("/end_session?client_id=web&post_logout_redirect_uri={}&state=bye", enc(CB)),
+        &[("cookie", &cookie)],
+    )
+    .await;
     assert_eq!(query_param(&out.location(), "state").as_deref(), Some("bye"));
     let res = get_with(&app, &uri, &[("cookie", &cookie)]).await;
     assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
@@ -281,7 +318,8 @@ async fn prompt_none_uses_session() {
 #[tokio::test]
 async fn dev_api_get_and_post() {
     let app = app();
-    let res = get(&app, "/dev/api/token?email=me@example.com&roles=%5B%22admin%22%5D&sub=007&expires_in=60").await.json();
+    let res =
+        get(&app, "/dev/api/token?email=me@example.com&roles=%5B%22admin%22%5D&sub=007&expires_in=60").await.json();
     let id = &res["id_token_claims"];
     assert_eq!(id["email"], "me@example.com");
     assert_eq!(id["roles"], json!(["admin"]));
@@ -318,9 +356,21 @@ async fn github_emulation() {
 
     // Full code flow through GitHub's paths; token response is form-encoded by default.
     // GitHub clients omit response_type.
-    let res = get(&app, &format!("/p/github/login/oauth/authorize?client_id=gh&redirect_uri={}&scope=read:user&dev_claims=%7B%7D", enc(CB))).await;
+    let res = get(
+        &app,
+        &format!(
+            "/p/github/login/oauth/authorize?client_id=gh&redirect_uri={}&scope=read:user&dev_claims=%7B%7D",
+            enc(CB)
+        ),
+    )
+    .await;
     let code = query_param(&res.location(), "code").unwrap();
-    let tok = post_form(&app, "/p/github/login/oauth/access_token", &[("client_id", "gh"), ("client_secret", "s"), ("code", &code)]).await;
+    let tok = post_form(
+        &app,
+        "/p/github/login/oauth/access_token",
+        &[("client_id", "gh"), ("client_secret", "s"), ("code", &code)],
+    )
+    .await;
     assert!(tok.body.starts_with("access_token=gho_"), "{}", tok.body);
 }
 
@@ -345,13 +395,22 @@ async fn device_flow() {
     let user_code = d["user_code"].as_str().unwrap();
     assert_eq!(d["verification_uri"], format!("{ISS}/device"));
 
-    let poll = [("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code), ("client_id", "tv")];
+    let poll = [
+        ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ("device_code", device_code),
+        ("client_id", "tv"),
+    ];
     assert_eq!(post_form(&app, "/token", &poll).await.json()["error"], "authorization_pending");
     assert_eq!(post_form(&app, "/token", &poll).await.json()["error"], "slow_down");
 
     let page = get(&app, &format!("/device?user_code={}", user_code.to_lowercase().replace('-', ""))).await;
     assert!(page.body.contains("Approve device"));
-    let ok = post_form(&app, "/device", &[("user_code", user_code), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"tv-user"}"#)]).await;
+    let ok = post_form(
+        &app,
+        "/device",
+        &[("user_code", user_code), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"tv-user"}"#)],
+    )
+    .await;
     assert!(ok.body.contains("Device approved"));
 
     let tok = post_form(&app, "/token", &poll).await.json();
@@ -364,24 +423,50 @@ async fn client_credentials_password_and_token_exchange() {
     let cc = post_form(
         &app,
         "/token",
-        &[("grant_type", "client_credentials"), ("scope", "orders.read"), ("audience", "api://orders"), ("dev_access_claims", r#"{"tenant":"t1"}"#)],
+        &[
+            ("grant_type", "client_credentials"),
+            ("scope", "orders.read"),
+            ("audience", "api://orders"),
+            ("dev_access_claims", r#"{"tenant":"t1"}"#),
+        ],
     )
     .await;
     assert_eq!(cc.json()["error"], "invalid_client");
-    let cc = post_form_with(&app, "/token", &[("grant_type", "client_credentials"), ("audience", "api://orders"), ("dev_access_claims", r#"{"tenant":"t1"}"#)], &[("authorization", "Basic c3ZjOnNlY3JldA==")]).await.json();
+    let cc = post_form_with(
+        &app,
+        "/token",
+        &[
+            ("grant_type", "client_credentials"),
+            ("audience", "api://orders"),
+            ("dev_access_claims", r#"{"tenant":"t1"}"#),
+        ],
+        &[("authorization", "Basic c3ZjOnNlY3JldA==")],
+    )
+    .await
+    .json();
     let c = claims(cc["access_token"].as_str().unwrap());
     assert_eq!(c["sub"], "svc");
     assert_eq!(c["aud"], "api://orders");
     assert_eq!(c["tenant"], "t1");
     assert!(cc.get("refresh_token").is_none());
 
-    let pw = post_form(&app, "/token", &[("grant_type", "password"), ("username", "alice@example.com"), ("password", "x"), ("client_id", "cli")]).await.json();
+    let pw = post_form(
+        &app,
+        "/token",
+        &[("grant_type", "password"), ("username", "alice@example.com"), ("password", "x"), ("client_id", "cli")],
+    )
+    .await
+    .json();
     assert_eq!(claims(pw["id_token"].as_str().unwrap())["email"], "alice@example.com");
 
     let ex = post_form(
         &app,
         "/token",
-        &[("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"), ("subject_token", pw["access_token"].as_str().unwrap()), ("audience", "api://downstream")],
+        &[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
+            ("subject_token", pw["access_token"].as_str().unwrap()),
+            ("audience", "api://downstream"),
+        ],
     )
     .await
     .json();
@@ -403,9 +488,16 @@ async fn registered_clients_are_enforced() {
     let res = get(&app, "/authorize?client_id=conf&redirect_uri=http://evil.test/&response_type=code").await;
     assert_eq!(res.status, StatusCode::BAD_REQUEST);
 
-    let res = get(&app, &format!("/authorize?client_id=conf&redirect_uri={}&response_type=code&dev_claims=%7B%7D", enc(CB))).await;
+    let res =
+        get(&app, &format!("/authorize?client_id=conf&redirect_uri={}&response_type=code&dev_claims=%7B%7D", enc(CB)))
+            .await;
     let code = query_param(&res.location(), "code").unwrap();
-    let bad = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", "conf"), ("client_secret", "wrong")]).await;
+    let bad = post_form(
+        &app,
+        "/token",
+        &[("grant_type", "authorization_code"), ("code", &code), ("client_id", "conf"), ("client_secret", "wrong")],
+    )
+    .await;
     assert_eq!(bad.status, StatusCode::UNAUTHORIZED);
 
     // Dynamic registration.
@@ -421,7 +513,19 @@ async fn registered_clients_are_enforced() {
 #[tokio::test]
 async fn pushed_authorization_requests() {
     let app = app();
-    let par = post_form(&app, "/par", &[("client_id", "web"), ("redirect_uri", CB), ("response_type", "code"), ("scope", "openid"), ("dev_claims", "{}"), ("state", "p")]).await;
+    let par = post_form(
+        &app,
+        "/par",
+        &[
+            ("client_id", "web"),
+            ("redirect_uri", CB),
+            ("response_type", "code"),
+            ("scope", "openid"),
+            ("dev_claims", "{}"),
+            ("state", "p"),
+        ],
+    )
+    .await;
     assert_eq!(par.status, StatusCode::CREATED);
     let uri = par.json()["request_uri"].as_str().unwrap().to_string();
     let res = get(&app, &format!("/authorize?client_id=web&request_uri={}", enc(&uri))).await;
@@ -432,7 +536,11 @@ async fn pushed_authorization_requests() {
 #[tokio::test]
 async fn auto_login_mode() {
     let (app, _) = app_with(Config { auto_login: true, default_preset: "keycloak".into(), ..Default::default() });
-    let res = get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&login_hint=bob", enc(CB))).await;
+    let res = get(
+        &app,
+        &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&login_hint=bob", enc(CB)),
+    )
+    .await;
     let code = query_param(&res.location(), "code").unwrap();
     let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code)]).await.json();
     let id = claims(tok["id_token"].as_str().unwrap());
@@ -456,12 +564,18 @@ async fn state_survives_restart() {
     // First "process": sign in, revoke a token, mint an opaque token, register a client, leave a code unused.
     let (app, _) = app_with(config());
     let req = start_login(&app, "", "").await;
-    let login = post_form(&app, "/login", &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"persist"}"#)]).await;
+    let login = post_form(
+        &app,
+        "/login",
+        &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", r#"{"sub":"persist"}"#)],
+    )
+    .await;
     let cookie = login.cookie();
     let unused_code = query_param(&login.location(), "code").unwrap();
     let revoked = get(&app, "/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string();
     post_form(&app, "/revoke", &[("token", &revoked)]).await;
-    let gho = get(&app, "/p/github/dev/api/token?login=octo").await.json()["access_token"].as_str().unwrap().to_string();
+    let gho =
+        get(&app, "/p/github/dev/api/token?login=octo").await.json()["access_token"].as_str().unwrap().to_string();
     let reg = Request::post("/register")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(json!({ "redirect_uris": [CB] }).to_string()))
@@ -487,19 +601,34 @@ async fn state_survives_restart() {
 
 /// Sign in through the login form and exchange the code; returns the token response.
 async fn login_and_exchange(app: &Router, client_id: &str, scope: &str, claims_json: &str) -> Value {
-    let res = get(app, &format!("/authorize?client_id={client_id}&redirect_uri={}&response_type=code&scope={}", enc(CB), enc(scope))).await;
+    let res = get(
+        app,
+        &format!("/authorize?client_id={client_id}&redirect_uri={}&response_type=code&scope={}", enc(CB), enc(scope)),
+    )
+    .await;
     let marker = r#"name="req" value=""#;
     let start = res.body.find(marker).expect("login form") + marker.len();
     let req = res.body[start..start + 36].to_string();
-    let login = post_form(app, "/login", &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", claims_json)]).await;
+    let login = post_form(
+        app,
+        "/login",
+        &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", claims_json)],
+    )
+    .await;
     let code = query_param(&login.location(), "code").unwrap();
-    post_form(app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", client_id)]).await.json()
+    post_form(app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", client_id)])
+        .await
+        .json()
 }
 
 #[tokio::test]
 async fn code_reuse_revokes_issued_tokens() {
     let app = app();
-    let res = get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&dev_claims=%7B%7D", enc(CB))).await;
+    let res = get(
+        &app,
+        &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&dev_claims=%7B%7D", enc(CB)),
+    )
+    .await;
     let code = query_param(&res.location(), "code").unwrap();
     let form = [("grant_type", "authorization_code"), ("code", code.as_str())];
     let tok = post_form(&app, "/token", &form).await.json();
@@ -509,7 +638,10 @@ async fn code_reuse_revokes_issued_tokens() {
     assert_eq!(post_form(&app, "/token", &form).await.json()["error"], "invalid_grant");
     assert_eq!(post_form(&app, "/introspect", &[("token", at)]).await.json()["active"], false);
     let rt = tok["refresh_token"].as_str().unwrap();
-    assert_eq!(post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt)]).await.json()["error"], "invalid_grant");
+    assert_eq!(
+        post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt)]).await.json()["error"],
+        "invalid_grant"
+    );
 }
 
 #[tokio::test]
@@ -547,7 +679,9 @@ async fn claims_by_scope_releases_only_scoped_standard_claims() {
 #[tokio::test]
 async fn relogin_keeps_auth_time_unless_reauthentication_is_required() {
     let app = app();
-    let uri = |extra: &str| format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid{extra}", enc(CB));
+    let uri = |extra: &str| {
+        format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid{extra}", enc(CB))
+    };
     let login = |cookie: Option<String>, extra: &'static str| {
         let app = app.clone();
         let uri = uri(extra);
@@ -612,7 +746,10 @@ async fn logout_validates_id_token_hint_for_registered_clients() {
 }
 
 async fn register(app: &Router, meta: Value) -> Resp {
-    let req = Request::post("/register").header(header::CONTENT_TYPE, "application/json").body(Body::from(meta.to_string())).unwrap();
+    let req = Request::post("/register")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(meta.to_string()))
+        .unwrap();
     send(app, req).await
 }
 
@@ -628,8 +765,21 @@ async fn registration_options_signed_userinfo_and_request_objects() {
     let cid = client["client_id"].as_str().unwrap();
     let res = get(&app, &format!("/authorize?client_id={cid}&redirect_uri={}&response_type=code&scope=openid&dev_claims=%7B%22sub%22%3A%22u%22%7D", enc(CB))).await;
     let code = query_param(&res.location(), "code").unwrap();
-    let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", cid), ("client_secret", client["client_secret"].as_str().unwrap())]).await.json();
-    let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {}", tok["access_token"].as_str().unwrap()))]).await;
+    let tok = post_form(
+        &app,
+        "/token",
+        &[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("client_id", cid),
+            ("client_secret", client["client_secret"].as_str().unwrap()),
+        ],
+    )
+    .await
+    .json();
+    let ui =
+        get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {}", tok["access_token"].as_str().unwrap()))])
+            .await;
     assert_eq!(ui.headers[header::CONTENT_TYPE], "application/jwt");
     let (_, ui_claims) = keys().verify(&ui.body).expect("signed userinfo");
     assert_eq!(ui_claims["aud"], cid);
@@ -676,7 +826,11 @@ async fn claims_parameter_and_hybrid_release_under_claims_by_scope() {
     let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {at}"))]).await.json();
     assert_eq!(ui, json!({ "sub": "s", "name": "N" }));
 
-    let bad = get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&claims=nope", enc(CB))).await;
+    let bad = get(
+        &app,
+        &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&claims=nope", enc(CB)),
+    )
+    .await;
     assert_eq!(query_param(&bad.location(), "error").as_deref(), Some("invalid_request"));
 }
 
@@ -690,7 +844,9 @@ async fn signing_key_rotation() {
     let mint = || async { get(&app, "/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string() };
     let userinfo_ok = |t: String| {
         let app = app.clone();
-        async move { get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {t}"))]).await.status == StatusCode::OK }
+        async move {
+            get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {t}"))]).await.status == StatusCode::OK
+        }
     };
 
     let original_kid = keys.kid();
