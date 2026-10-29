@@ -1,15 +1,15 @@
 //! Device authorization grant (RFC 8628).
 
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::html::{data_script, error_page, esc, message_page, page};
 use crate::routes::authorize::{current_session, editor_data, editor_submission};
 use crate::routes::token::authenticate_client;
@@ -22,7 +22,8 @@ const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ";
 
 fn user_code() -> String {
     let mut rng = rand::thread_rng();
-    let mut code: String = (0..8).map(|_| USER_CODE_ALPHABET[rng.gen_range(0..USER_CODE_ALPHABET.len())] as char).collect();
+    let mut code: String =
+        (0..8).map(|_| USER_CODE_ALPHABET[rng.gen_range(0..USER_CODE_ALPHABET.len())] as char).collect();
     code.insert(4, '-');
     code
 }
@@ -72,11 +73,9 @@ pub async fn device_authorization(
 
 fn find_by_user_code(state: &AppState, tenant: &Tenant, code: &str) -> Option<DeviceEntry> {
     let code = normalize_user_code(code);
-    state
-        .store
-        .list::<DeviceEntry>(Table::Devices)
-        .into_iter()
-        .find(|d| d.user_code == code && d.tenant == tenant.key() && d.exp > now() && matches!(d.status, DeviceStatus::Pending))
+    state.store.list::<DeviceEntry>(Table::Devices).into_iter().find(|d| {
+        d.user_code == code && d.tenant == tenant.key() && d.exp > now() && matches!(d.status, DeviceStatus::Pending)
+    })
 }
 
 #[derive(Deserialize)]
@@ -113,11 +112,8 @@ pub async fn device_page(
         return page(&tenant, "Device sign-in", &body).into_response();
     };
 
-    let scopes: String = entry
-        .scope
-        .split_whitespace()
-        .map(|s| format!(r#"<span class="chip">{}</span>"#, esc(s)))
-        .collect();
+    let scopes: String =
+        entry.scope.split_whitespace().map(|s| format!(r#"<span class="chip">{}</span>"#, esc(s))).collect();
     let previous = current_session(&state, &tenant, &headers).map(|(_, s)| s);
     let body = format!(
         r#"<div class="layout">
@@ -157,7 +153,12 @@ pub async fn device_submit(State(state): State<AppState>, tenant: Tenant, body: 
     let form = parse_form(&body);
     let code = form.get("user_code").cloned().unwrap_or_default();
     let Some(entry) = find_by_user_code(&state, &tenant, &code) else {
-        return error_page(&tenant, StatusCode::BAD_REQUEST, "Invalid code", "That device code is invalid or has expired.");
+        return error_page(
+            &tenant,
+            StatusCode::BAD_REQUEST,
+            "Invalid code",
+            "That device code is invalid or has expired.",
+        );
     };
     let status = if form.get("action").map(String::as_str) == Some("deny") {
         DeviceStatus::Denied

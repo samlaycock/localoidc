@@ -1,34 +1,41 @@
 //! Dynamic client registration (RFC 7591).
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::state::{AppState, Client};
 use crate::store::Table;
 use crate::util::{now, random_string};
 
 fn strings(v: &Value) -> Vec<String> {
-    v.as_array()
-        .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
-        .unwrap_or_default()
+    v.as_array().map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default()
 }
 
 pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) -> Response {
     let Value::Object(mut meta) = meta else {
-        return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_client_metadata", "expected a JSON object").into_response();
+        return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_client_metadata", "expected a JSON object")
+            .into_response();
     };
     let redirect_uris = strings(meta.get("redirect_uris").unwrap_or(&Value::Null));
     if let Some(bad) = redirect_uris.iter().find(|u| url::Url::parse(u).is_err()) {
-        return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_redirect_uri", format!("'{bad}' is not an absolute URL"))
-            .into_response();
+        return OAuthError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            format!("'{bad}' is not an absolute URL"),
+        )
+        .into_response();
     }
     if let Some(bad) = redirect_uris.iter().find(|u| u.contains('#')) {
-        return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_redirect_uri", format!("'{bad}' must not contain a fragment"))
-            .into_response();
+        return OAuthError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            format!("'{bad}' must not contain a fragment"),
+        )
+        .into_response();
     }
     let userinfo_alg = meta.get("userinfo_signed_response_alg").and_then(Value::as_str).map(String::from);
     if userinfo_alg.as_deref().is_some_and(|a| a != "RS256" && a != "none") {
@@ -39,11 +46,8 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
         )
         .into_response();
     }
-    let auth_method = meta
-        .get("token_endpoint_auth_method")
-        .and_then(Value::as_str)
-        .unwrap_or("client_secret_basic")
-        .to_string();
+    let auth_method =
+        meta.get("token_endpoint_auth_method").and_then(Value::as_str).unwrap_or("client_secret_basic").to_string();
     let client = Client {
         client_id: uuid::Uuid::new_v4().to_string(),
         client_secret: (auth_method != "none").then(|| random_string(48)),

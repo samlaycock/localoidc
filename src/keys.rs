@@ -9,7 +9,7 @@ use rsa::sha2::{Digest, Sha256};
 use rsa::signature::{SignatureEncoding, Signer, Verifier};
 use rsa::traits::PublicKeyParts;
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::util::{b64, b64_decode, now};
 
@@ -99,7 +99,12 @@ impl Keys {
             key
         };
         let mut files: Vec<PathBuf> = fs::read_dir(dir.join(RETIRED_DIR))
-            .map(|entries| entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "pem")).collect())
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.extension().is_some_and(|x| x == "pem"))
+                    .collect()
+            })
             .unwrap_or_default();
         // File names start with the retirement timestamp, so reverse order is newest first.
         files.sort();
@@ -139,7 +144,10 @@ impl Keys {
             }
         }
         tracing::info!("rotated signing key: {} is now current", ring.current.kid);
-        Ok(Rotation { kid: ring.current.kid.clone(), retired_kids: ring.retired.iter().map(|k| k.kid.clone()).collect() })
+        Ok(Rotation {
+            kid: ring.current.kid.clone(),
+            retired_kids: ring.retired.iter().map(|k| k.kid.clone()).collect(),
+        })
     }
 
     pub fn sign(&self, typ: &str, claims: &Value) -> String {
@@ -217,8 +225,7 @@ pub fn verify_rs256_with_jwks(token: &str, jwks: &Value) -> Option<Value> {
             let e = rsa::BigUint::from_bytes_be(&b64_decode(jwk["e"].as_str()?)?);
             RsaPublicKey::new(n, e).ok()
         };
-        usable
-            && key().is_some_and(|k| VerifyingKey::<Sha256>::new(k).verify(input.as_bytes(), &signature).is_ok())
+        usable && key().is_some_and(|k| VerifyingKey::<Sha256>::new(k).verify(input.as_bytes(), &signature).is_ok())
     });
     verified.then(|| serde_json::from_slice(&b64_decode(p)?).ok()).flatten()
 }

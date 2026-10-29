@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde_json::json;
 
 use crate::presets;
@@ -12,10 +12,36 @@ use crate::tenant::Tenant;
 pub async fn openid_configuration(State(state): State<AppState>, tenant: Tenant) -> impl IntoResponse {
     let u = |p: &str| tenant.url(p);
     let mut claims: BTreeSet<&str> = [
-        "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr", "azp", "sid", "name", "given_name",
-        "family_name", "middle_name", "nickname", "preferred_username", "profile", "picture", "website", "email",
-        "email_verified", "gender", "birthdate", "zoneinfo", "locale", "phone_number", "phone_number_verified",
-        "address", "updated_at",
+        "sub",
+        "iss",
+        "aud",
+        "exp",
+        "iat",
+        "auth_time",
+        "nonce",
+        "acr",
+        "amr",
+        "azp",
+        "sid",
+        "name",
+        "given_name",
+        "family_name",
+        "middle_name",
+        "nickname",
+        "preferred_username",
+        "profile",
+        "picture",
+        "website",
+        "email",
+        "email_verified",
+        "gender",
+        "birthdate",
+        "zoneinfo",
+        "locale",
+        "phone_number",
+        "phone_number_verified",
+        "address",
+        "updated_at",
     ]
     .into_iter()
     .collect();

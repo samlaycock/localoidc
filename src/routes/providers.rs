@@ -2,13 +2,13 @@
 
 use axum::body::Bytes;
 use axum::extract::{RawQuery, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::error::{no_store, OAuthError};
+use crate::error::{OAuthError, no_store};
 use crate::routes::{authorize, discovery, logout, token, userinfo};
 use crate::state::{AppState, Grant};
 use crate::tenant::Tenant;
@@ -156,10 +156,7 @@ pub async fn github_token(
     body: Bytes,
 ) -> Response {
     let params = merged_params(query.as_deref(), &body);
-    let wants_json = headers
-        .get(header::ACCEPT)
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|a| a.contains("json"));
+    let wants_json = headers.get(header::ACCEPT).and_then(|h| h.to_str().ok()).is_some_and(|a| a.contains("json"));
     let value = match token::handle_token(&state, &tenant, &headers, &params) {
         Ok(mut v) => {
             v["token_type"] = json!("bearer");
@@ -176,7 +173,8 @@ pub async fn github_token(
             ser.append_pair(k, &crate::util::value_to_string(v));
         }
     }
-    (StatusCode::OK, [(header::CONTENT_TYPE, "application/x-www-form-urlencoded; charset=utf-8")], ser.finish()).into_response()
+    (StatusCode::OK, [(header::CONTENT_TYPE, "application/x-www-form-urlencoded; charset=utf-8")], ser.finish())
+        .into_response()
 }
 
 /// Google's tokeninfo: validates an `id_token` or `access_token` and returns its claims.

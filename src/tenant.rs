@@ -1,6 +1,6 @@
 use axum::extract::{FromRequestParts, OriginalUri};
 use axum::http::request::Parts;
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 use crate::config::Config;
@@ -23,9 +23,7 @@ impl Tenant {
             Some(p) => format!("{base}/p/{}", p.id),
             None => base.to_string(),
         };
-        let prefix = url::Url::parse(&issuer)
-            .map(|u| u.path().trim_end_matches('/').to_string())
-            .unwrap_or_default();
+        let prefix = url::Url::parse(&issuer).map(|u| u.path().trim_end_matches('/').to_string()).unwrap_or_default();
         Self { preset, issuer, prefix }
     }
 
@@ -67,11 +65,7 @@ impl FromRequestParts<AppState> for Tenant {
                 .or_else(|| parts.headers.get(header::HOST))
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("localhost");
-            let proto = parts
-                .headers
-                .get("x-forwarded-proto")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("http");
+            let proto = parts.headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()).unwrap_or("http");
             format!("{proto}://{host}")
         } else {
             state.config.issuer.clone()

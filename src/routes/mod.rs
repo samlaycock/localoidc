@@ -9,8 +9,8 @@ pub mod register;
 pub mod token;
 pub mod userinfo;
 
-use axum::routing::{any, get, post};
 use axum::Router;
+use axum::routing::{any, get, post};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
