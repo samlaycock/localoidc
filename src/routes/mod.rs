@@ -39,6 +39,7 @@ fn issuer_routes() -> Router<AppState> {
         .route("/dev", get(dev::page_handler))
         .route("/dev/api/token", get(dev::api_token_get).post(dev::api_token_post))
         .route("/dev/api/presets", get(dev::api_presets))
+        .route("/dev/api/rotate-keys", post(dev::api_rotate_keys))
 }
 
 pub fn router(state: AppState) -> Router {

@@ -26,6 +26,19 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
         return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_redirect_uri", format!("'{bad}' is not an absolute URL"))
             .into_response();
     }
+    if let Some(bad) = redirect_uris.iter().find(|u| u.contains('#')) {
+        return OAuthError::new(StatusCode::BAD_REQUEST, "invalid_redirect_uri", format!("'{bad}' must not contain a fragment"))
+            .into_response();
+    }
+    let userinfo_alg = meta.get("userinfo_signed_response_alg").and_then(Value::as_str).map(String::from);
+    if userinfo_alg.as_deref().is_some_and(|a| a != "RS256" && a != "none") {
+        return OAuthError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "userinfo_signed_response_alg must be RS256 (or none)",
+        )
+        .into_response();
+    }
     let auth_method = meta
         .get("token_endpoint_auth_method")
         .and_then(Value::as_str)
@@ -38,6 +51,9 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
         post_logout_redirect_uris: strings(meta.get("post_logout_redirect_uris").unwrap_or(&Value::Null)),
         client_name: meta.get("client_name").and_then(Value::as_str).map(String::from),
         token_endpoint_auth_method: Some(auth_method.clone()),
+        jwks: meta.get("jwks").cloned(),
+        jwks_uri: meta.get("jwks_uri").and_then(Value::as_str).map(String::from),
+        userinfo_signed_response_alg: userinfo_alg,
     };
 
     meta.insert("client_id".into(), json!(client.client_id));

@@ -70,6 +70,7 @@ pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<V
             None => vec![],
         },
         acr: None,
+        requested_claims: Default::default(),
     };
     let opts = IssueOpts {
         id_token: req.id_token.unwrap_or_else(|| has_scope(&scope, "openid") || preset.protocol == "oidc"),
@@ -144,6 +145,25 @@ pub async fn api_token_get(
     }
 }
 
+/// Non-standard: rotate the signing key (shared by every issuer). The previous keys stay in the
+/// JWKS so already-issued tokens keep verifying.
+pub async fn api_rotate_keys(State(state): State<AppState>, tenant: Tenant) -> Response {
+    let keys = state.keys.clone();
+    match tokio::task::spawn_blocking(move || keys.rotate()).await {
+        Ok(Ok(rotation)) => (
+            no_store(),
+            Json(json!({
+                "kid": rotation.kid,
+                "retired_kids": rotation.retired_kids,
+                "jwks_uri": tenant.url("/jwks"),
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation failed: {e:#}")).into_response(),
+        Err(e) => OAuthError::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", format!("key rotation panicked: {e}")).into_response(),
+    }
+}
+
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
 }
@@ -173,13 +193,28 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
   <div class="actions"><button class="btn primary" id="dev-generate" type="button">Generate tokens</button></div>
 </section>
 <section class="card result" id="dev-result" hidden></section>
+<section class="card">
+  <div class="eyebrow">Signing key</div>
+  <p class="muted">Tokens are signed with key <code id="dev-kid">{kid}</code>. Rotating creates a new key; the previous {kept} stay in the JWKS so tokens already issued keep verifying. Scripts can use <code>POST {rotate}</code>.</p>
+  <div class="actions"><button class="btn" id="dev-rotate" type="button">Rotate signing key</button></div>
+</section>
 </div>
 {data}"#,
         issuer = esc(&tenant.issuer),
         api = esc(&api),
         scope = esc(preset.default_scope),
         ttl = state.config.access_token_ttl,
-        data = data_script(&editor_data(&state, &tenant, "dev", previous.as_ref(), None, json!({ "api": api }))),
+        kid = esc(&state.keys.kid()),
+        kept = crate::keys::RETIRED_KEYS_KEPT,
+        rotate = esc(&tenant.url("/dev/api/rotate-keys")),
+        data = data_script(&editor_data(
+            &state,
+            &tenant,
+            "dev",
+            previous.as_ref(),
+            None,
+            json!({ "api": api, "rotateApi": tenant.url("/dev/api/rotate-keys") }),
+        )),
     );
     (StatusCode::OK, page(&tenant, "Token generator", &body)).into_response()
 }

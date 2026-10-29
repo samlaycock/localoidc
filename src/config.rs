@@ -135,6 +135,7 @@ struct FileConfig {
     code_ttl: Option<i64>,
     refresh_tokens: Option<RefreshPolicy>,
     access_token_identity_claims: Option<bool>,
+    claims_by_scope: Option<bool>,
     clients: Vec<Client>,
 }
 
@@ -156,6 +157,10 @@ pub struct Config {
     pub refresh_tokens: RefreshPolicy,
     /// Copy identity claims (email, name, roles, ...) into JWT access tokens.
     pub access_token_identity_claims: bool,
+    /// Spec-strict claim release: the ID token and userinfo only carry the standard claims
+    /// allowed by the requested scopes (profile, email, address, phone). Off by default so
+    /// every claim set in the UI/API shows up everywhere.
+    pub claims_by_scope: bool,
     pub clients: Vec<Client>,
 }
 
@@ -177,6 +182,7 @@ impl Default for Config {
             code_ttl: 300,
             refresh_tokens: RefreshPolicy::Always,
             access_token_identity_claims: true,
+            claims_by_scope: false,
             clients: vec![],
         }
     }
@@ -229,6 +235,7 @@ impl Config {
             code_ttl: file.code_ttl.unwrap_or(d.code_ttl),
             refresh_tokens: args.refresh_tokens.or(file.refresh_tokens).unwrap_or_default(),
             access_token_identity_claims: file.access_token_identity_claims.unwrap_or(true),
+            claims_by_scope: file.claims_by_scope.unwrap_or(false),
             clients: file.clients,
         })
     }

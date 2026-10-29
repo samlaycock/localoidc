@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::error::{no_store, OAuthError};
 use crate::state::{AppState, Grant};
-use crate::store::Table;
+use crate::tenant::Tenant;
 use crate::tokens::{self, Kind};
 use crate::util::{merged_params, non_empty};
 
@@ -39,15 +39,29 @@ pub fn authorize_bearer(state: &AppState, headers: &HeaderMap, params: &HashMap<
 
 pub async fn userinfo(
     State(state): State<AppState>,
+    tenant: Tenant,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
     body: Bytes,
 ) -> Response {
     let params = merged_params(query.as_deref(), &body);
-    match authorize_bearer(&state, &headers, &params) {
-        Ok(grant) => (no_store(), Json(Value::Object(tokens::userinfo_claims(&grant)))).into_response(),
-        Err(e) => e.into_response(),
+    let grant = match authorize_bearer(&state, &headers, &params) {
+        Ok(grant) => grant,
+        Err(e) => return e.into_response(),
+    };
+    let mut claims = tokens::userinfo_claims(&state, &grant);
+    let signed = state
+        .client(&grant.client_id)
+        .and_then(|c| c.userinfo_signed_response_alg)
+        .is_some_and(|alg| alg == "RS256");
+    if signed {
+        // OIDC Core 5.3.2: signed responses carry iss and aud.
+        claims.insert("iss".into(), json!(tenant.issuer));
+        claims.insert("aud".into(), json!(grant.client_id));
+        let jwt = state.keys.sign("JWT", &Value::Object(claims));
+        return (no_store(), [(header::CONTENT_TYPE, "application/jwt")], jwt).into_response();
     }
+    (no_store(), Json(Value::Object(claims))).into_response()
 }
 
 pub async fn introspect(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -91,11 +105,7 @@ pub async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Byt
     let Some(token) = non_empty(&params, "token") else {
         return OAuthError::invalid_request("token is required").into_response();
     };
-    if !state.store.remove(Table::Opaque, &token)
-        && let Some(v) = tokens::verify(&state, &token)
-            && let Some(jti) = v.jti {
-                state.store.put(Table::Revoked, &jti, &v.exp, Some(v.exp));
-            }
+    tokens::revoke(&state, &token);
     // RFC 7009: respond 200 even for unknown tokens.
     (no_store(), "").into_response()
 }

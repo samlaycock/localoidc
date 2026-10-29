@@ -126,7 +126,7 @@ pub async fn provider_user(
             "web_url": claim(&grant, "profile"),
             "state": "active",
         }),
-        _ => Value::Object(tokens::userinfo_claims(&grant)),
+        _ => Value::Object(tokens::userinfo_claims(&state, &grant)),
     };
     (no_store(), Json(body)).into_response()
 }

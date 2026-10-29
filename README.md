@@ -30,6 +30,7 @@ Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_s
 | Dynamic client registration (RFC 7591) | `/register` |
 | Token generator UI (non-standard) | `/dev` |
 | Token API (non-standard) | `/dev/api/token` |
+| Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Built-in test redirect target | `/callback` |
 
 ### Supported protocol features
@@ -39,13 +40,30 @@ Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_s
 - PKCE with `S256` and `plain`.
 - `nonce`, `state`, `prompt` (`none`, `login`, `consent`, `select_account`), `max_age`, `login_hint`, `acr_values`, and `resource`/`audience`.
 - ID tokens include `at_hash`, `c_hash`, `auth_time`, `sid` and `azp`.
-- Request objects (`request=`): the parameters are read from the JWT payload, but its signature is not verified.
+- Request objects, passed by value (`request=`) or by reference (`request_uri=`, fetched over HTTP(S)). RS256 request objects are verified against the client's registered `jwks` or `jwks_uri`. Other algorithms, and clients without registered keys, are accepted unverified.
 - Grants: `authorization_code`, `refresh_token` (including scope down-scoping), `client_credentials`, `password`, `device_code` and token exchange (RFC 8693).
 - Client authentication: `client_secret_basic`, `client_secret_post` and `none`. `private_key_jwt` and `client_secret_jwt` assertions are accepted without verification.
 - Signing: ID and access tokens are signed with RS256. Access tokens follow RFC 9068 (`typ: at+jwt`). Refresh tokens are signed JWTs too, so they keep working after a restart.
-- Sessions use a cookie, so `prompt=none` silent auth works. A "Continue as…" shortcut appears on the next login.
+- Sessions use a cookie, so `prompt=none` silent auth works. A "Continue as…" shortcut appears on the next login. Signing in again during a session keeps the original `auth_time`, unless `prompt=login` or `max_age` requires a fresh login.
+- Userinfo is returned as a signed JWT for clients registered with `userinfo_signed_response_alg=RS256`.
+- Reusing an authorization code revokes the tokens issued from it.
+- RP-initiated logout: registered clients must send a valid `id_token_hint` with a registered `post_logout_redirect_uri`, otherwise an error page is shown. Unregistered clients can redirect as long as they're identified by `client_id` or a hint.
 
-Not implemented: front-/back-channel logout, `check_session_iframe`, encrypted tokens, signed/encrypted userinfo, the `claims` request parameter, and JARM.
+Not implemented: front-/back-channel logout, `check_session_iframe`, encrypted tokens and userinfo, unsigned ID tokens, pairwise subjects, and JARM.
+
+### Which claims go where
+
+By default every claim you set appears in the ID token, userinfo and (unless `access_token_identity_claims = false`) the access token, whatever scopes were requested. That's usually what you want from a local IdP.
+
+Set `claims_by_scope = true` for spec-strict behaviour (OIDC Core 5.4):
+- The ID token and userinfo only carry the standard claims the granted scopes allow: `profile`, `email`, `address` and `phone`.
+- Unless `response_type=id_token`, those claims come only from userinfo, not the ID token.
+- Claims requested explicitly with the `claims` request parameter (OIDC Core 5.5) are released where they were asked for.
+- Non-standard claims such as `roles`, `groups` or your custom claims go only in the access token.
+
+### Conformance
+
+The [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite) can be run locally with `./conformance/run.sh`. See [`conformance/README.md`](conformance/README.md).
 
 ## Provider emulation
 
@@ -103,6 +121,19 @@ export TOKEN=$(localoidc token --format access -c email=me@example.com -c 'roles
 localoidc token --preset microsoft --audience api://orders --access-claim tenant=t1
 ```
 
+### Rotating the signing key
+
+`POST /dev/api/rotate-keys`, or the **Rotate signing key** button on `/dev`, generates a new signing key. It's useful for testing how your app handles JWKS changes.
+
+- The keyring is shared by all issuers.
+- New tokens are signed with the new key straight away.
+- The previous two keys stay in the JWKS, so tokens already issued keep verifying until a third rotation retires them.
+
+```sh
+curl -s -X POST http://localhost:9400/dev/api/rotate-keys
+# {"kid":"…new…","retired_kids":["…old…"],"jwks_uri":"http://localhost:9400/jwks"}
+```
+
 ### Automating browser logins (Playwright, Cypress, …)
 
 - Add `dev_claims=<JSON or base64url JSON>` to an `/authorize` request. It signs in immediately with the preset defaults merged with those claims. `dev_preset=<id>` picks the preset.
@@ -113,7 +144,7 @@ localoidc token --preset microsoft --audience api://orders --access-claim tenant
 
 Settings come from CLI flags, `LOCALOIDC_*` environment variables, or `localoidc.toml`. See [`localoidc.example.toml`](localoidc.example.toml) and `localoidc --help`.
 
-- All state lives in `~/.localoidc/`: the signing key in `signing-key.pem`, and everything else in the SQLite database `state.db`. That covers sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Each kind of record has its own table (`key`, JSON `value`, `expires_at`). Expired rows are purged every minute. Delete `state.db` to start fresh. If there's no data directory, an in-memory SQLite database is used.
+- All state lives in `~/.localoidc/`: the current signing key in `signing-key.pem`, retired keys in `retired-keys/`, and everything else in the SQLite database `state.db`. That covers sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Each kind of record has its own table (`key`, JSON `value`, `expires_at`). Expired rows are purged every minute. Delete `state.db` to start fresh. If there's no data directory, an in-memory SQLite database is used.
 - When running in Docker with both browser and backend access, set `--issuer` to a URL both can reach, or use `--dynamic-issuer`.
 
 ```sh

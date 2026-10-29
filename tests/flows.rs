@@ -123,7 +123,7 @@ async fn discovery_and_jwks() {
 
     let jwks = get(&app, "/jwks").await.json();
     assert_eq!(jwks["keys"][0]["kty"], "RSA");
-    assert_eq!(jwks["keys"][0]["kid"], keys().kid);
+    assert_eq!(jwks["keys"][0]["kid"], keys().kid());
 
     assert_eq!(get(&app, "/p/nope/.well-known/openid-configuration").await.status, StatusCode::NOT_FOUND);
 }
@@ -189,9 +189,6 @@ async fn authorization_code_flow_with_pkce_refresh_introspect_revoke() {
     assert_eq!(ac["permissions"], json!(["orders:write"]));
     assert_eq!(ac["scope"], "openid profile email");
     assert!(id.get("permissions").is_none());
-
-    // Code reuse is rejected.
-    assert_eq!(post_form(&app, "/token", &form).await.json()["error"], "invalid_grant");
 
     let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {at}"))]).await.json();
     assert_eq!(ui["sub"], "u-42");
@@ -275,7 +272,7 @@ async fn prompt_none_uses_session() {
     assert!(query_param(&res.location(), "code").is_some(), "{}", res.location());
 
     // Logout clears it.
-    let out = get_with(&app, &format!("/end_session?post_logout_redirect_uri={}&state=bye", enc(CB)), &[("cookie", &cookie)]).await;
+    let out = get_with(&app, &format!("/end_session?client_id=web&post_logout_redirect_uri={}&state=bye", enc(CB)), &[("cookie", &cookie)]).await;
     assert_eq!(query_param(&out.location(), "state").as_deref(), Some("bye"));
     let res = get_with(&app, &uri, &[("cookie", &cookie)]).await;
     assert_eq!(query_param(&res.location(), "error").as_deref(), Some("login_required"));
@@ -484,6 +481,246 @@ async fn state_survives_restart() {
     assert!(state.client(&client_id).is_some());
     let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &unused_code)]).await.json();
     assert_eq!(claims(tok["id_token"].as_str().unwrap())["sub"], "persist");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Sign in through the login form and exchange the code; returns the token response.
+async fn login_and_exchange(app: &Router, client_id: &str, scope: &str, claims_json: &str) -> Value {
+    let res = get(app, &format!("/authorize?client_id={client_id}&redirect_uri={}&response_type=code&scope={}", enc(CB), enc(scope))).await;
+    let marker = r#"name="req" value=""#;
+    let start = res.body.find(marker).expect("login form") + marker.len();
+    let req = res.body[start..start + 36].to_string();
+    let login = post_form(app, "/login", &[("req", &req), ("action", "approve"), ("preset", "generic"), ("claims", claims_json)]).await;
+    let code = query_param(&login.location(), "code").unwrap();
+    post_form(app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", client_id)]).await.json()
+}
+
+#[tokio::test]
+async fn code_reuse_revokes_issued_tokens() {
+    let app = app();
+    let res = get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&dev_claims=%7B%7D", enc(CB))).await;
+    let code = query_param(&res.location(), "code").unwrap();
+    let form = [("grant_type", "authorization_code"), ("code", code.as_str())];
+    let tok = post_form(&app, "/token", &form).await.json();
+    let at = tok["access_token"].as_str().unwrap();
+    assert_eq!(post_form(&app, "/introspect", &[("token", at)]).await.json()["active"], true);
+
+    assert_eq!(post_form(&app, "/token", &form).await.json()["error"], "invalid_grant");
+    assert_eq!(post_form(&app, "/introspect", &[("token", at)]).await.json()["active"], false);
+    let rt = tok["refresh_token"].as_str().unwrap();
+    assert_eq!(post_form(&app, "/token", &[("grant_type", "refresh_token"), ("refresh_token", rt)]).await.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn claims_by_scope_releases_only_scoped_standard_claims() {
+    let full = r#"{"sub":"s","name":"N","email":"e@x.y","email_verified":true,"phone_number":"+1","roles":["admin"]}"#;
+
+    // Default: everything everywhere.
+    let tok = login_and_exchange(&app(), "web", "openid", full).await;
+    assert_eq!(claims(tok["id_token"].as_str().unwrap())["roles"], json!(["admin"]));
+
+    let (app, _) = app_with(Config { claims_by_scope: true, ..Default::default() });
+    let tok = login_and_exchange(&app, "web", "openid email", full).await;
+    let id = claims(tok["id_token"].as_str().unwrap());
+    // Code flow: scope claims come from userinfo, not the ID token.
+    assert!(id.get("email").is_none() && id.get("name").is_none() && id.get("roles").is_none());
+    let at = tok["access_token"].as_str().unwrap();
+    let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {at}"))]).await.json();
+    assert_eq!(ui, json!({ "sub": "s", "email": "e@x.y", "email_verified": true }));
+    // Non-standard claims stay available in the access token.
+    assert_eq!(claims(at)["roles"], json!(["admin"]));
+
+    // Implicit id_token-only: scope claims go in the ID token.
+    let res = get(
+        &app,
+        &format!("/authorize?client_id=web&redirect_uri={}&response_type=id_token&scope=openid%20phone&nonce=n&dev_claims={}", enc(CB), enc(full)),
+    )
+    .await;
+    let frag: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(res.location().fragment().unwrap().as_bytes()).into_owned().collect();
+    let id = claims(&frag["id_token"]);
+    assert_eq!(id["phone_number"], "+1");
+    assert!(id.get("email").is_none());
+}
+
+#[tokio::test]
+async fn relogin_keeps_auth_time_unless_reauthentication_is_required() {
+    let app = app();
+    let uri = |extra: &str| format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid{extra}", enc(CB));
+    let login = |cookie: Option<String>, extra: &'static str| {
+        let app = app.clone();
+        let uri = uri(extra);
+        async move {
+            let headers: Vec<(&str, &str)> = cookie.as_deref().map(|c| vec![("cookie", c)]).unwrap_or_default();
+            let page = get_with(&app, &uri, &headers).await;
+            let marker = r#"name="req" value=""#;
+            let start = page.body.find(marker).unwrap() + marker.len();
+            let req = page.body[start..start + 36].to_string();
+            let mut b = Request::post("/login").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            if let Some(c) = &cookie {
+                b = b.header("cookie", c);
+            }
+            let body = format!("req={req}&action=approve&preset=generic");
+            let res = send(&app, b.body(Body::from(body)).unwrap()).await;
+            let code = query_param(&res.location(), "code").unwrap();
+            let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code)]).await.json();
+            (res.cookie(), claims(tok["id_token"].as_str().unwrap())["auth_time"].as_i64().unwrap())
+        }
+    };
+    let (cookie, first) = login(None, "").await;
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let (_, again) = login(Some(cookie.clone()), "&max_age=10000").await;
+    assert_eq!(again, first);
+    let (_, forced) = login(Some(cookie), "&prompt=login").await;
+    assert!(forced > first);
+}
+
+#[tokio::test]
+async fn logout_validates_id_token_hint_for_registered_clients() {
+    let config = Config {
+        clients: vec![Client {
+            client_id: "reg".into(),
+            redirect_uris: vec![CB.into()],
+            post_logout_redirect_uris: vec!["http://app.test/bye".into()],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let (app, _) = app_with(config);
+    let tok = login_and_exchange(&app, "reg", "openid", r#"{"sub":"s"}"#).await;
+    let hint = tok["id_token"].as_str().unwrap();
+    let bye = enc("http://app.test/bye");
+
+    let ok = get(&app, &format!("/end_session?id_token_hint={hint}&post_logout_redirect_uri={bye}&state=x")).await;
+    assert_eq!(ok.location().as_str(), "http://app.test/bye?state=x");
+
+    // No hint, unregistered URI, forged hint, hint for another client.
+    for uri in [
+        format!("/end_session?client_id=reg&post_logout_redirect_uri={bye}"),
+        format!("/end_session?id_token_hint={hint}&post_logout_redirect_uri={}", enc("http://evil.test/")),
+        format!("/end_session?id_token_hint={}x&post_logout_redirect_uri={bye}", &hint[..hint.len() - 1]),
+        format!("/end_session?client_id=other&id_token_hint={hint}&post_logout_redirect_uri={bye}"),
+    ] {
+        let res = get(&app, &uri).await;
+        assert_eq!(res.status, StatusCode::BAD_REQUEST, "{uri}");
+        assert!(res.headers.get(header::LOCATION).is_none());
+    }
+
+    // No redirect requested: signed-out page.
+    assert!(get(&app, "/end_session").await.body.contains("Signed out"));
+}
+
+async fn register(app: &Router, meta: Value) -> Resp {
+    let req = Request::post("/register").header(header::CONTENT_TYPE, "application/json").body(Body::from(meta.to_string())).unwrap();
+    send(app, req).await
+}
+
+#[tokio::test]
+async fn registration_options_signed_userinfo_and_request_objects() {
+    let app = app();
+    let bad = register(&app, json!({ "redirect_uris": ["https://app.test/cb#frag"] })).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad.json()["error"], "invalid_redirect_uri");
+
+    // Signed userinfo.
+    let client = register(&app, json!({ "redirect_uris": [CB], "userinfo_signed_response_alg": "RS256" })).await.json();
+    let cid = client["client_id"].as_str().unwrap();
+    let res = get(&app, &format!("/authorize?client_id={cid}&redirect_uri={}&response_type=code&scope=openid&dev_claims=%7B%22sub%22%3A%22u%22%7D", enc(CB))).await;
+    let code = query_param(&res.location(), "code").unwrap();
+    let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code), ("client_id", cid), ("client_secret", client["client_secret"].as_str().unwrap())]).await.json();
+    let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {}", tok["access_token"].as_str().unwrap()))]).await;
+    assert_eq!(ui.headers[header::CONTENT_TYPE], "application/jwt");
+    let (_, ui_claims) = keys().verify(&ui.body).expect("signed userinfo");
+    assert_eq!(ui_claims["aud"], cid);
+    assert_eq!(ui_claims["sub"], "u");
+
+    // RS256 request objects are verified against the client's registered JWKS.
+    let client_keys = Keys::generate().unwrap();
+    let rp = register(&app, json!({ "redirect_uris": [CB], "jwks": client_keys.jwks() })).await.json();
+    let rp_id = rp["client_id"].as_str().unwrap();
+    let request = |signer: &Keys| {
+        signer.sign("oauth-authz-req+jwt", &json!({
+            "client_id": rp_id, "redirect_uri": CB, "response_type": "code", "scope": "openid", "state": "ro", "dev_claims": "{}"
+        }))
+    };
+    let ok = get(&app, &format!("/authorize?client_id={rp_id}&request={}", request(&client_keys))).await;
+    assert_eq!(query_param(&ok.location(), "state").as_deref(), Some("ro"));
+    let forged = get(&app, &format!("/authorize?client_id={rp_id}&request={}", request(&keys()))).await;
+    assert_eq!(forged.status, StatusCode::BAD_REQUEST);
+    assert!(forged.body.contains("signature"));
+}
+
+#[tokio::test]
+async fn claims_parameter_and_hybrid_release_under_claims_by_scope() {
+    let (app, _) = app_with(Config { claims_by_scope: true, ..Default::default() });
+    let identity = enc(r#"{"sub":"s","name":"N","email":"e@x.y","roles":["r"]}"#);
+
+    // Hybrid code id_token: no scope claims in the front-channel ID token...
+    let res = get(&app, &format!(
+        "/authorize?client_id=web&redirect_uri={}&response_type=code%20id_token&scope=openid%20email&nonce=n&dev_claims={identity}", enc(CB))).await;
+    let frag: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(res.location().fragment().unwrap().as_bytes()).into_owned().collect();
+    assert!(claims(&frag["id_token"]).get("email").is_none());
+
+    // ...but explicitly requested claims are released where asked, even without the scope.
+    let requested = enc(r#"{"id_token":{"roles":null},"userinfo":{"name":{"essential":true}}}"#);
+    let res = get(&app, &format!(
+        "/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&claims={requested}&dev_claims={identity}", enc(CB))).await;
+    let code = query_param(&res.location(), "code").unwrap();
+    let tok = post_form(&app, "/token", &[("grant_type", "authorization_code"), ("code", &code)]).await.json();
+    let id = claims(tok["id_token"].as_str().unwrap());
+    assert_eq!(id["roles"], json!(["r"]));
+    assert!(id.get("name").is_none());
+    let at = tok["access_token"].as_str().unwrap();
+    let ui = get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {at}"))]).await.json();
+    assert_eq!(ui, json!({ "sub": "s", "name": "N" }));
+
+    let bad = get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid&claims=nope", enc(CB))).await;
+    assert_eq!(query_param(&bad.location(), "error").as_deref(), Some("invalid_request"));
+}
+
+#[tokio::test]
+async fn signing_key_rotation() {
+    let dir = std::env::temp_dir().join(format!("localoidc-rotate-{}", uuid::Uuid::new_v4()));
+    let keys = Arc::new(Keys::load_or_create(&dir).unwrap());
+    let state = AppState::new(Config { data_dir: Some(dir.clone()), ..Default::default() }, keys.clone()).unwrap();
+    let app = router(state);
+    let kid_of = |t: &str| localoidc::keys::decode_header_unverified(t).unwrap()["kid"].as_str().unwrap().to_string();
+    let mint = || async { get(&app, "/dev/api/token").await.json()["access_token"].as_str().unwrap().to_string() };
+    let userinfo_ok = |t: String| {
+        let app = app.clone();
+        async move { get_with(&app, "/userinfo", &[("authorization", &format!("Bearer {t}"))]).await.status == StatusCode::OK }
+    };
+
+    let original_kid = keys.kid();
+    let old_token = mint().await;
+
+    let rotated = send(&app, Request::post("/dev/api/rotate-keys").body(Body::empty()).unwrap()).await.json();
+    let new_kid = rotated["kid"].as_str().unwrap().to_string();
+    assert_ne!(new_kid, original_kid);
+    assert_eq!(rotated["retired_kids"], json!([original_kid]));
+
+    let jwks = get(&app, "/jwks").await.json();
+    let kids: Vec<&str> = jwks["keys"].as_array().unwrap().iter().map(|k| k["kid"].as_str().unwrap()).collect();
+    assert_eq!(kids, vec![new_kid.as_str(), original_kid.as_str()]);
+
+    // New tokens use the new key; old tokens still verify.
+    assert_eq!(kid_of(&mint().await), new_kid);
+    assert!(userinfo_ok(old_token.clone()).await);
+
+    // Keys persist across a restart.
+    let reloaded = Keys::load_or_create(&dir).unwrap();
+    assert_eq!(reloaded.kid(), new_kid);
+    assert_eq!(reloaded.jwks()["keys"].as_array().unwrap().len(), 2);
+
+    // After two more rotations the original key falls out of the ring (2 retired keys kept).
+    for _ in 0..2 {
+        send(&app, Request::post("/p/google/dev/api/rotate-keys").body(Body::empty()).unwrap()).await;
+    }
+    assert_eq!(get(&app, "/jwks").await.json()["keys"].as_array().unwrap().len(), 3);
+    assert!(!userinfo_ok(old_token).await);
+    assert_eq!(std::fs::read_dir(dir.join("retired-keys")).unwrap().count(), 2);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -7,7 +7,6 @@ use axum::response::{IntoResponse, Redirect, Response};
 use serde_json::Value;
 
 use crate::html::{error_page, message_page};
-use crate::keys::decode_unverified;
 use crate::routes::authorize::{clear_session_cookie, cookie_value};
 use crate::state::AppState;
 use crate::store::Table;
@@ -22,35 +21,64 @@ pub async fn end_session(
     body: Bytes,
 ) -> Response {
     let params = merged_params(query.as_deref(), &body);
-    let hint_aud = non_empty(&params, "id_token_hint")
-        .and_then(|t| decode_unverified(&t))
-        .and_then(|c| c.get("aud").cloned())
-        .map(|aud| match aud {
-            Value::Array(a) => a.first().map(value_to_string).unwrap_or_default(),
-            v => value_to_string(&v),
-        });
+    let bad = |detail: &str| error_page(&tenant, StatusCode::BAD_REQUEST, "Logout request rejected", detail);
+
+    // The hint's signature must be ours; expiry is ignored (RP-Initiated Logout 1.0 §2: the OP
+    // should accept expired ID tokens as hints).
+    let hint = match non_empty(&params, "id_token_hint") {
+        Some(token) => match state.keys.verify(&token) {
+            Some((_, Value::Object(claims))) if claims.get("iss").and_then(Value::as_str) == Some(tenant.issuer.as_str()) => {
+                Some(claims)
+            }
+            _ => return bad("id_token_hint could not be validated: it was not issued by this server."),
+        },
+        None => None,
+    };
+    let hint_aud = hint.as_ref().and_then(|c| c.get("aud")).map(|aud| match aud {
+        Value::Array(a) => a.first().map(value_to_string).unwrap_or_default(),
+        v => value_to_string(v),
+    });
+    if let (Some(client_id), Some(aud)) = (non_empty(&params, "client_id"), &hint_aud)
+        && client_id != *aud
+    {
+        return bad("id_token_hint was not issued to the given client_id.");
+    }
     let client_id = non_empty(&params, "client_id").or(hint_aud);
 
-    if let Some(sid) = cookie_value(&headers, &tenant.cookie_name()) {
-        state.store.remove(Table::Sessions, &sid);
-    }
-
-    let mut resp = match non_empty(&params, "post_logout_redirect_uri") {
+    let redirect = match non_empty(&params, "post_logout_redirect_uri") {
         Some(uri) => {
-            let client = client_id.and_then(|c| state.client(&c));
-            if client.is_some_and(|c| !c.post_logout_redirect_uris.is_empty() && !c.post_logout_redirect_uris.contains(&uri)) {
-                return error_page(&tenant, StatusCode::BAD_REQUEST, "Invalid post_logout_redirect_uri", &uri);
+            match client_id.as_deref().map(|c| (c, state.client(c))) {
+                // Registered clients: the hint and a registered URI are required (§3).
+                Some((_, Some(client))) => {
+                    if hint.is_none() {
+                        return bad("post_logout_redirect_uri can only be used together with id_token_hint.");
+                    }
+                    if !client.post_logout_redirect_uris.is_empty() && !client.post_logout_redirect_uris.contains(&uri) {
+                        return bad(&format!("post_logout_redirect_uri '{uri}' is not registered for this client."));
+                    }
+                }
+                // Unregistered clients are trusted in the default lenient mode, as long as we know who they are.
+                Some((_, None)) if !state.config.strict_clients => {}
+                _ => return bad("post_logout_redirect_uri requires an id_token_hint identifying a registered client."),
             }
             match url::Url::parse(&uri) {
                 Ok(mut url) => {
                     if let Some(s) = non_empty(&params, "state") {
                         url.query_pairs_mut().append_pair("state", &s);
                     }
-                    Redirect::to(url.as_str()).into_response()
+                    Some(url)
                 }
-                Err(_) => return error_page(&tenant, StatusCode::BAD_REQUEST, "Invalid post_logout_redirect_uri", &uri),
+                Err(_) => return bad(&format!("post_logout_redirect_uri '{uri}' is not a valid URL.")),
             }
         }
+        None => None,
+    };
+
+    if let Some(sid) = cookie_value(&headers, &tenant.cookie_name()) {
+        state.store.remove(Table::Sessions, &sid);
+    }
+    let mut resp = match redirect {
+        Some(url) => Redirect::to(url.as_str()).into_response(),
         None => message_page(&tenant, "Signed out", "Your localoidc session has ended. You can close this tab."),
     };
     if let Ok(v) = HeaderValue::from_str(&clear_session_cookie(&tenant)) {

@@ -11,7 +11,7 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{no_store, OAuthError};
 use crate::html::{data_script, error_page, esc, form_post, page};
-use crate::keys::decode_unverified;
+use crate::keys::{decode_header_unverified, decode_unverified, verify_rs256_with_jwks};
 use crate::presets;
 use crate::state::{AppState, AuthRequest, CodeEntry, Grant, Session};
 use crate::store::Table;
@@ -126,10 +126,10 @@ pub async fn authorize(
     body: Bytes,
 ) -> Response {
     let params = merged_params(query.as_deref(), &body);
-    handle_authorize(&state, &tenant, &headers, params)
+    handle_authorize(&state, &tenant, &headers, params).await
 }
 
-pub fn handle_authorize(
+pub async fn handle_authorize(
     state: &AppState,
     tenant: &Tenant,
     headers: &HeaderMap,
@@ -137,25 +137,61 @@ pub fn handle_authorize(
 ) -> Response {
     let bad = |title: &str, detail: &str| error_page(tenant, StatusCode::BAD_REQUEST, title, detail);
 
-    // Pushed authorization request (RFC 9126).
+    // request_uri: a pushed authorization request (RFC 9126) or a request object by reference (RFC 9101 §5.2).
     if let Some(uri) = non_empty(&params, "request_uri") {
-        let Some(id) = uri.strip_prefix(PAR_PREFIX) else {
-            return bad("Unsupported request_uri", "Only request_uri values from the PAR endpoint are supported.");
-        };
-        let Some(pushed) = state.store.get::<HashMap<String, String>>(Table::Par, id) else {
-            return bad("Unknown request_uri", "The pushed authorization request was not found or has expired.");
-        };
-        if params.get("client_id").is_some_and(|c| Some(c) != pushed.get("client_id")) {
-            return bad("client_id mismatch", "client_id does not match the pushed authorization request.");
+        if let Some(id) = uri.strip_prefix(PAR_PREFIX) {
+            let Some(pushed) = state.store.get::<HashMap<String, String>>(Table::Par, id) else {
+                return bad("Unknown request_uri", "The pushed authorization request was not found or has expired.");
+            };
+            if params.get("client_id").is_some_and(|c| Some(c) != pushed.get("client_id")) {
+                return bad("client_id mismatch", "client_id does not match the pushed authorization request.");
+            }
+            params = pushed;
+        } else if uri.starts_with("https://") || uri.starts_with("http://") {
+            match crate::fetch::text(&uri).await {
+                Ok(jwt) => {
+                    params.remove("request_uri");
+                    params.insert("request".into(), jwt.trim().to_string());
+                }
+                Err(e) => return bad("Unable to fetch request_uri", &e),
+            }
+        } else {
+            return bad("Unsupported request_uri", "request_uri must be an http(s) URL or come from the PAR endpoint.");
         }
-        params = pushed;
     }
 
-    // Request objects (RFC 9101): signature is not verified, parameters are taken from the payload.
+    // Request objects (RFC 9101). RS256 objects are verified when the client has registered keys;
+    // other algorithms, and clients without keys, are accepted unverified.
     if let Some(request) = non_empty(&params, "request") {
-        let Some(Value::Object(payload)) = decode_unverified(&request) else {
-            return bad("Invalid request object", "The `request` parameter is not a decodable JWT.");
+        let (Some(header), Some(Value::Object(payload))) = (decode_header_unverified(&request), decode_unverified(&request)) else {
+            return bad("Invalid request object", "The request object is not a decodable JWT.");
         };
+        let inner_client = payload.get("client_id").map(value_to_string);
+        if let (Some(outer), Some(inner)) = (non_empty(&params, "client_id"), &inner_client)
+            && outer != *inner
+        {
+            return bad("client_id mismatch", "client_id in the request object does not match the request.");
+        }
+        let alg = header["alg"].as_str().unwrap_or("none");
+        let client = non_empty(&params, "client_id").or(inner_client).and_then(|c| state.client(&c));
+        if alg != "none" && let Some(client) = client {
+            let jwks = match (client.jwks, client.jwks_uri) {
+                (Some(jwks), _) => Some(jwks),
+                (None, Some(uri)) => match crate::fetch::json(&uri).await {
+                    Ok(jwks) => Some(jwks),
+                    Err(e) => return bad("Unable to fetch client jwks_uri", &e),
+                },
+                (None, None) => None,
+            };
+            if let Some(jwks) = jwks {
+                if alg != "RS256" {
+                    return bad("Unsupported request object algorithm", &format!("'{alg}' request objects are not supported; use RS256 or none."));
+                }
+                if verify_rs256_with_jwks(&request, &jwks).is_none() {
+                    return bad("Invalid request object", "The request object signature does not verify against the client's registered keys.");
+                }
+            }
+        }
         for (k, v) in payload {
             if !matches!(k.as_str(), "iss" | "aud" | "exp" | "iat" | "nbf" | "jti") {
                 params.insert(k, value_to_string(&v));
@@ -237,6 +273,13 @@ pub fn handle_authorize(
         .filter_map(|k| non_empty(&params, k))
         .flat_map(|v| v.split_whitespace().map(String::from).collect::<Vec<_>>())
         .collect();
+    let requested_claims = match non_empty(&params, "claims") {
+        Some(raw) => match crate::state::RequestedClaims::parse(&raw) {
+            Ok(c) => c,
+            Err(e) => return fail("invalid_request", &e),
+        },
+        None => Default::default(),
+    };
 
     let req = AuthRequest {
         id: uuid::Uuid::new_v4().to_string(),
@@ -256,6 +299,7 @@ pub fn handle_authorize(
         login_hint: non_empty(&params, "login_hint"),
         acr_values: non_empty(&params, "acr_values"),
         audience,
+        requested_claims,
     };
 
     let default_preset = tenant.default_preset(&state.config);
@@ -335,6 +379,7 @@ fn complete(
         sid: Some(sid.clone()),
         audience: req.audience.clone(),
         acr: req.acr_values.as_ref().and_then(|a| a.split_whitespace().next().map(String::from)),
+        requested_claims: req.requested_claims.clone(),
     };
 
     let mut out: Vec<(String, String)> = vec![];
@@ -348,6 +393,8 @@ fn complete(
             code_challenge: req.code_challenge.clone(),
             code_challenge_method: req.code_challenge_method.clone(),
             exp,
+            used: false,
+            issued: vec![],
         };
         state.store.put(Table::Codes, &code, &entry, Some(exp));
         code
@@ -526,7 +573,14 @@ pub async fn login(State(state): State<AppState>, tenant: Tenant, headers: Heade
         Err(e) => return error_page(&tenant, StatusCode::BAD_REQUEST, "Invalid claims", &e),
     };
     // Re-use the existing session id so `sid` stays stable across logins in the same browser.
-    let existing = current_session(&state, &tenant, &headers).map(|(sid, _)| (sid, now()));
+    // Submitting the claims editor during a live session isn't a re-authentication, so the
+    // original auth_time is kept unless prompt=login or max_age demanded a fresh login.
+    let reauth = req.prompt.iter().any(|p| p == "login");
+    let existing = current_session(&state, &tenant, &headers).map(|(sid, s)| {
+        let expired = req.max_age.is_some_and(|max| now() - s.auth_time > max);
+        let auth_time = if reauth || expired { now() } else { s.auth_time };
+        (sid, auth_time)
+    });
     complete(&state, &tenant, &req, preset.id, claims, access, existing)
 }
 

@@ -177,6 +177,7 @@ pub async fn device_submit(State(state): State<AppState>, tenant: Tenant, body: 
             sid: None,
             audience: entry.audience.clone(),
             acr: None,
+            requested_claims: Default::default(),
         }))
     };
     let denied = matches!(status, DeviceStatus::Denied);

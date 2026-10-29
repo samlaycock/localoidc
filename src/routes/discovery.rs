@@ -44,7 +44,7 @@ pub async fn openid_configuration(State(state): State<AppState>, tenant: Tenant)
         ],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "userinfo_signing_alg_values_supported": ["none"],
+        "userinfo_signing_alg_values_supported": ["RS256"],
         "request_object_signing_alg_values_supported": ["none", "RS256", "ES256", "HS256"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_basic", "client_secret_post", "client_secret_jwt", "private_key_jwt", "none"
@@ -59,13 +59,14 @@ pub async fn openid_configuration(State(state): State<AppState>, tenant: Tenant)
         "request_uri_parameter_supported": true,
         "require_request_uri_registration": false,
         "require_pushed_authorization_requests": false,
-        "claims_parameter_supported": false,
+        "claims_parameter_supported": true,
         "authorization_response_iss_parameter_supported": true,
         "frontchannel_logout_supported": false,
         "backchannel_logout_supported": false,
         "localoidc": {
             "preset": tenant.preset.map(|p| p.id),
             "dev_token_endpoint": u("/dev/api/token"),
+            "dev_rotate_keys_endpoint": u("/dev/api/rotate-keys"),
             "dev_ui": u("/dev"),
             "presets": presets::all().iter().map(|p| p.id).collect::<Vec<_>>(),
         }

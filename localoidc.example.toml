@@ -16,6 +16,7 @@
 # code_ttl = 300
 # refresh_tokens = "always"   # always | offline_access | never
 # access_token_identity_claims = true  # copy email/name/roles... into JWT access tokens
+# claims_by_scope = false     # true: ID token/userinfo only get the standard claims the scopes allow
 
 # Declared clients get their secret and redirect URIs enforced.
 # Undeclared clients are accepted with any secret/redirect_uri unless strict_clients = true.

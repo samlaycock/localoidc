@@ -142,10 +142,19 @@ fn authorization_code(
     params: &HashMap<String, String>,
 ) -> Result<Value, OAuthError> {
     let code = require(params, "code")?;
-    let entry = state
+    // Mark the code used atomically. Redeeming it again revokes everything the first
+    // redemption issued (RFC 6749 §4.1.2).
+    let (first_use, entry) = state
         .store
-        .take::<CodeEntry>(Table::Codes, &code)
-        .ok_or_else(|| OAuthError::invalid_grant("authorization code is invalid or has already been used"))?;
+        .update(Table::Codes, &code, |e: &mut CodeEntry| (!std::mem::replace(&mut e.used, true), e.clone()))
+        .ok_or_else(|| OAuthError::invalid_grant("authorization code is invalid"))?;
+    if !first_use {
+        for token in &entry.issued {
+            tokens::revoke(state, token);
+        }
+        state.store.remove(Table::Codes, &code);
+        return Err(OAuthError::invalid_grant("authorization code has already been used; tokens issued from it were revoked"));
+    }
     if entry.exp <= now() {
         return Err(OAuthError::invalid_grant("authorization code has expired"));
     }
@@ -170,6 +179,8 @@ fn authorization_code(
     }
     let grant = entry.grant;
     let issued = tokens::issue(state, tenant, &grant, &opts_for(state, &grant));
+    let tokens: Vec<String> = std::iter::once(issued.access_token.clone()).chain(issued.refresh_token.clone()).collect();
+    state.store.update(Table::Codes, &code, |e: &mut CodeEntry| e.issued = tokens);
     Ok(issued.to_json())
 }
 
@@ -218,6 +229,7 @@ fn client_credentials(
         sid: None,
         audience: audience(params),
         acr: None,
+        requested_claims: Default::default(),
     };
     let opts = IssueOpts { id_token: false, refresh_token: false, ..Default::default() };
     Ok(tokens::issue(state, tenant, &grant, &opts).to_json())
@@ -248,6 +260,7 @@ fn password(
         sid: None,
         audience: audience(params),
         acr: None,
+        requested_claims: Default::default(),
     };
     Ok(tokens::issue(state, tenant, &grant, &opts_for(state, &grant)).to_json())
 }

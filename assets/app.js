@@ -263,6 +263,22 @@
   function initDev() {
     const $ = (id) => document.getElementById(id);
     const out = $('dev-result');
+    $('dev-rotate').addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.disabled = true;
+      try {
+        const res = await fetch(data.rotateApi, { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error_description || res.statusText);
+        $('dev-kid').textContent = json.kid;
+        btn.textContent = 'Rotated';
+        setTimeout(() => (btn.textContent = 'Rotate signing key'), 1500);
+      } catch (err) {
+        alert(`Key rotation failed: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
     $('dev-generate').addEventListener('click', async () => {
       const { claims, access, errors } = build();
       if (errors.length) { refresh(); return; }
