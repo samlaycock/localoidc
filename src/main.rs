@@ -21,6 +21,20 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Some(Command::Users) => {
+            let config = Config::load(&cli.server)?;
+            let fallback = presets::get_or_generic(&config.default_preset);
+            for user in &config.users {
+                let (preset, claims, _) = user.resolve(None, fallback);
+                let who = ["email", "name", "preferred_username", "login", "username"]
+                    .iter()
+                    .find_map(|k| claims.get(*k).and_then(Value::as_str))
+                    .unwrap_or_default();
+                let sub = claims.get("sub").and_then(Value::as_str).unwrap_or_default();
+                println!("{:<16} {:<10} {:<32} {}", user.id, preset.id, who, sub);
+            }
+            Ok(())
+        }
         Some(Command::Serve) | None => serve(&cli.server).await,
     }
 }
@@ -95,6 +109,7 @@ fn token(server: &localoidc::config::ServerArgs, args: TokenArgs) -> anyhow::Res
     };
     claims.extend(parse_pairs(&args.claims)?);
     let req = DevTokenRequest {
+        user: args.user,
         preset: args.preset.or(args.tenant),
         client_id: Some(args.client_id),
         audience: (!args.audience.is_empty()).then_some(OneOrMany::Many(args.audience)),

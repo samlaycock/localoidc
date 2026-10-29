@@ -173,8 +173,14 @@
   function quickSection() {
     const items = [];
     if (data.previous && !isDev) items.push({ kind: 'session', label: 'Active session', identity: { ...data.previous, access: data.previous.access_claims } });
-    // "Last used" only when it isn't already offered as the session or a saved identity.
-    const key = (i) => JSON.stringify([i.preset, i.claims]);
+    // Users declared in localoidc.toml, shared by everyone using this server.
+    (data.users || []).forEach((u) => items.push({ kind: 'user', label: u.label || u.id, identity: u }));
+    // "Last used" only when it isn't already offered as the session, a user or a saved identity.
+    // Key order differs between the server (sorted) and the editor (field order), so sort it away.
+    const stable = (v) => Array.isArray(v) ? `[${v.map(stable).join(',')}]`
+      : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`
+      : JSON.stringify(v);
+    const key = (i) => stable([i.preset, i.claims]);
     const last = readJson(LS_LAST, null);
     const offered = new Set([...items.map((i) => key(i.identity)), ...saved().map(key)]);
     if (last && !offered.has(key(last))) items.push({ kind: 'last', label: 'Last used', identity: last });
@@ -183,10 +189,12 @@
     const cards = items.map((item) => {
       const p = byId[item.identity.preset] || presets[0];
       const who = describe(item.identity.claims || {});
+      const named = item.kind === 'saved' || item.kind === 'user';
       return h('div', { class: `quick-card is-${item.kind}`, style: `--c:${p.color}` },
         h('div', { class: 'quick-meta' },
-          h('span', { class: 'quick-label' }, item.kind === 'saved' ? item.label : h('span', {}, h('em', {}, item.label), ` · ${who}`)),
-          h('span', { class: 'quick-provider' }, h('span', { class: 'dot' }), p.name, item.kind === 'saved' && item.label !== who ? ` · ${who}` : null)),
+          h('span', { class: 'quick-label' }, named ? item.label : h('span', {}, h('em', {}, item.label), ` · ${who}`)),
+          h('span', { class: 'quick-provider' }, h('span', { class: 'dot' }), p.name, named && item.label !== who ? ` · ${who}` : null,
+            item.kind === 'user' ? h('span', { class: 'quick-tag', title: 'Declared in localoidc.toml' }, 'config') : null)),
         h('div', { class: 'quick-actions' },
           h('button', { type: 'button', class: 'btn small primary', onclick: () => useIdentity(item.identity) }, isDev ? 'Generate' : 'Sign in'),
           h('button', { type: 'button', class: 'btn small ghost', onclick: () => editIdentity(item.identity) }, 'Edit'),

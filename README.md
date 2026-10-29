@@ -138,10 +138,34 @@ curl -s -X POST http://localhost:9400/dev/api/rotate-keys
 # {"kid":"…new…","retired_kids":["…old…"],"jwks_uri":"http://localhost:9400/jwks"}
 ```
 
+### Declared users
+
+Declare named users in `localoidc.toml` so a team, its tests and CI all sign in as the same people:
+
+```toml
+[[users]]
+id = "alice"                  # used by dev_user, --user and the dev API
+label = "Alice (admin)"       # optional, shown on the login page
+preset = "google"             # optional, otherwise the issuer's default preset
+claims = { email = "alice@acme.dev", roles = ["admin"] }
+access_claims = { permissions = ["orders:write"] }  # optional, access token only
+# defaults = false            # don't merge over the preset's default claims
+# password = "s3cret"         # required by the password grant when set
+```
+
+- Users appear at the top of the login, device and `/dev` pages for one-click sign-in.
+- Each user gets a stable `sub` shaped like the provider's (for example 21 digits for Google) unless you set one. For presets that derive `sub` from another claim, such as GitHub's `id`, that claim is generated instead.
+- `/authorize?…&dev_user=alice` signs in as Alice straight away. `dev_claims` are merged on top.
+- With `--auto-login`, a `login_hint` matching a user's `id` or `email` signs in as that user.
+- The `password` grant resolves `username` the same way.
+- `POST /dev/api/token` accepts `"user": "alice"` (or `?user=alice` on GET), with `claims` and `access_token_claims` merged on top. `GET /dev/api/users` lists the users as the issuer would issue them.
+- On the CLI, `localoidc token --user alice` mints tokens for a user, and `localoidc users` lists them.
+
 ### Automating browser logins (Playwright, Cypress, …)
 
+- Add `dev_user=<id>` to an `/authorize` request to sign in as a [declared user](#declared-users) immediately.
 - Add `dev_claims=<JSON or base64url JSON>` to an `/authorize` request. It signs in immediately with the preset defaults merged with those claims. `dev_preset=<id>` picks the preset.
-- Alternatively, start the server with `--auto-login` so every authorization request signs in with the preset defaults. A `login_hint` sets the email or username.
+- Alternatively, start the server with `--auto-login` so every authorization request signs in with the preset defaults. A `login_hint` sets the email or username, or picks a declared user.
 - The `password` and `client_credentials` grants accept `dev_claims` and `dev_access_claims` form parameters.
 
 ## Configuration

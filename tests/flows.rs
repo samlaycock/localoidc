@@ -880,3 +880,156 @@ async fn signing_key_rotation() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn users_app(auto_login: bool) -> Router {
+    let users = serde_json::from_value(json!([
+        {
+            "id": "alice",
+            "label": "Alice (admin)",
+            "preset": "google",
+            "claims": { "email": "alice@acme.dev", "roles": ["admin"] },
+            "access_claims": { "permissions": ["orders:write"] },
+            "password": "s3cret"
+        },
+        { "id": "bob", "claims": { "sub": "bob-1", "email": "bob@acme.dev" } },
+        { "id": "carol", "preset": "github", "claims": { "login": "carol" } }
+    ]))
+    .unwrap();
+    app_with(Config { users, auto_login, ..Default::default() }).0
+}
+
+/// Run an implicit `id_token token` request and return the fragment parameters.
+async fn implicit(app: &Router, extra: &str) -> std::collections::HashMap<String, String> {
+    let res = get(
+        app,
+        &format!(
+            "/authorize?client_id=spa&redirect_uri={}&response_type=id_token%20token&scope=openid&nonce=n{extra}",
+            enc(CB)
+        ),
+    )
+    .await;
+    url::form_urlencoded::parse(res.location().fragment().unwrap_or_default().as_bytes()).into_owned().collect()
+}
+
+#[tokio::test]
+async fn declared_users_sign_in_with_dev_user() {
+    let app = users_app(false);
+    let frag = implicit(&app, "&dev_user=alice").await;
+    let id = claims(&frag["id_token"]);
+    assert_eq!(id["email"], "alice@acme.dev");
+    assert_eq!(id["roles"], json!(["admin"]));
+    // A stable subject shaped like Google's, not the preset's shared example.
+    let sub = id["sub"].as_str().unwrap();
+    assert!(sub.len() == 21 && sub.chars().all(|c| c.is_ascii_digit()), "{sub}");
+    assert_ne!(sub, "109876543210987654321");
+    assert_eq!(claims(&implicit(&app, "&dev_user=alice").await["id_token"])["sub"], sub);
+    assert_eq!(claims(&frag["access_token"])["permissions"], json!(["orders:write"]));
+
+    // dev_claims layer over the user.
+    let frag = implicit(&app, &format!("&dev_user=bob&dev_claims={}", enc(r#"{"name":"Robert"}"#))).await;
+    let id = claims(&frag["id_token"]);
+    assert_eq!((id["sub"].as_str(), id["name"].as_str()), (Some("bob-1"), Some("Robert")));
+
+    // Presets that derive `sub` from another claim get a stable one of those.
+    let id = claims(&implicit(&app, "&dev_user=carol").await["id_token"]);
+    let gh_id = id["id"].as_i64().unwrap();
+    assert_ne!(gh_id, 1234567);
+    assert_eq!(id["sub"], gh_id.to_string());
+
+    let frag = implicit(&app, "&dev_user=nobody").await;
+    assert_eq!(frag["error"], "invalid_request");
+}
+
+#[tokio::test]
+async fn declared_users_in_dev_api_and_login_page() {
+    let app = users_app(false);
+    let req = Request::post("/dev/api/token")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "user": "alice", "claims": { "name": "Al" }, "access_token_claims": { "tier": "gold" } })
+                .to_string(),
+        ))
+        .unwrap();
+    let res = send(&app, req).await.json();
+    assert_eq!(res["preset"], "google");
+    assert_eq!(res["id_token_claims"]["email"], "alice@acme.dev");
+    assert_eq!(res["id_token_claims"]["name"], "Al");
+    assert_eq!(res["access_token_claims"]["permissions"], json!(["orders:write"]));
+    assert_eq!(res["access_token_claims"]["tier"], "gold");
+
+    let res = get(&app, "/dev/api/token?user=bob").await.json();
+    assert_eq!(res["id_token_claims"]["sub"], "bob-1");
+    assert_eq!(get(&app, "/dev/api/token?user=nobody").await.status, StatusCode::BAD_REQUEST);
+
+    let users = get(&app, "/p/keycloak/dev/api/users").await.json();
+    assert_eq!(users.as_array().unwrap().len(), 3);
+    assert_eq!(users[0]["label"], "Alice (admin)");
+    assert_eq!(users[1]["preset"], "keycloak");
+    assert!(users[0].get("password").is_none());
+
+    let page =
+        get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid", enc(CB))).await;
+    assert!(page.body.contains(r#""users":[{"#) && page.body.contains("alice@acme.dev"));
+    assert!(!page.body.contains("s3cret"));
+}
+
+#[tokio::test]
+async fn declared_users_with_password_grant_and_auto_login() {
+    let app = users_app(true);
+    let grant = |username: &'static str, password: &'static str| {
+        let app = app.clone();
+        async move {
+            post_form(
+                &app,
+                "/token",
+                &[
+                    ("grant_type", "password"),
+                    ("username", username),
+                    ("password", password),
+                    ("client_id", "cli"),
+                    ("scope", "openid"),
+                ],
+            )
+            .await
+        }
+    };
+    let res = grant("alice", "wrong").await;
+    assert_eq!(res.status, StatusCode::BAD_REQUEST);
+    assert_eq!(res.json()["error"], "invalid_grant");
+    let res = grant("ALICE@acme.dev", "s3cret").await.json();
+    assert_eq!(claims(res["id_token"].as_str().unwrap())["email"], "alice@acme.dev");
+    // Users without a password accept any; unknown usernames keep the old behaviour.
+    let res = grant("bob", "whatever").await.json();
+    assert_eq!(claims(res["id_token"].as_str().unwrap())["sub"], "bob-1");
+    let res = grant("dave@acme.dev", "x").await.json();
+    assert_eq!(claims(res["id_token"].as_str().unwrap())["email"], "dave@acme.dev");
+
+    // --auto-login: a login_hint naming a user signs in as them.
+    let id = claims(&implicit(&app, "&login_hint=bob").await["id_token"]);
+    assert_eq!(id["email"], "bob@acme.dev");
+}
+
+#[test]
+fn declared_users_are_validated() {
+    let load = |toml: &str| {
+        let path = std::env::temp_dir().join(format!("localoidc-{}.toml", uuid::Uuid::new_v4()));
+        std::fs::write(&path, toml).unwrap();
+        let args = localoidc::config::ServerArgs { config: Some(path.clone()), ..Default::default() };
+        let result = Config::load(&args);
+        std::fs::remove_file(path).unwrap();
+        result
+    };
+    let config = load(
+        r#"
+[[users]]
+id = "alice"
+preset = "okta"
+claims = { email = "alice@acme.dev", groups = ["admins"] }
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.user("alice").unwrap().claims["groups"], json!(["admins"]));
+    assert!(load("[[users]]\nid = \"a\"\n[[users]]\nid = \"a\"\n").is_err());
+    assert!(load("[[users]]\nid = \"a\"\npreset = \"nope\"\n").is_err());
+    assert!(load("[[users]]\nid = \"a\"\nemail = \"oops\"\n").is_err());
+}

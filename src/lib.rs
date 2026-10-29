@@ -9,6 +9,7 @@ pub mod state;
 pub mod store;
 pub mod tenant;
 pub mod tokens;
+pub mod users;
 pub mod util;
 
 use std::sync::Arc;
