@@ -53,7 +53,7 @@ Some tests take a screenshot of an error page or the login page for manual revie
 | `configs/static.json` | Suite config for static-client plans: client credentials and browser automation |
 | `configs/dynamic.json` | Suite config for dynamic-registration plans |
 | `patch-runner.py` | Adds the key-rotation hook to the suite's runner |
-| `expected-failures.json`, `expected-skips.json` | Known, accepted results; anything else fails the run |
+| `expected-failures.json`, `expected-skips.json` | Known, accepted results, tagged with the plan `groups` they occur in; anything else fails the run |
 
 ## Notes
 

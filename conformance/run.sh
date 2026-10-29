@@ -107,12 +107,21 @@ log "Checking the suite can reach https://localoidc.test"
 compose run --rm --no-deps --entrypoint python3 runner -c \
     "import httpx,sys; r=httpx.get('https://localoidc.test/.well-known/openid-configuration', verify=False); print(r.status_code, r.json()['issuer']); sys.exit(r.status_code!=200)"
 
-# 4. Run the plans.
+# 4. Run the plans. The runner fails on expectations that never come up, so only pass
+#    the expected failures/skips tagged with a group that's being run.
+for kind in failures skips; do
+    python3 - "$kind" $GROUPS_TO_RUN > "results/expected-$kind.json" <<'PY'
+import json, sys
+kind, groups = sys.argv[1], set(sys.argv[2:])
+entries = [e for e in json.load(open(f"expected-{kind}.json")) if groups & set(e.pop("groups"))]
+print(json.dumps(entries, indent=2))
+PY
+done
 log "Running: $GROUPS_TO_RUN"
 rm -f results/*.zip
 set +e
 compose run --rm --no-deps runner --export-dir results --verbose \
-    --expected-failures-file expected-failures.json --expected-skips-file expected-skips.json \
+    --expected-failures-file results/expected-failures.json --expected-skips-file results/expected-skips.json \
     "${PLAN_ARGS[@]}" 2>&1 | tee results/run.log
 STATUS=${PIPESTATUS[0]}
 set -e
