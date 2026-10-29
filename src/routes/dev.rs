@@ -190,7 +190,7 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
   <div class="eyebrow">Token generator</div>
   <h1>Mint tokens for <span class="accent">{issuer}</span></h1>
   <p class="muted">Generate access, ID and refresh tokens without running a login flow. Scripts and tests can use the same thing via <code>POST {api}</code>.</p>
-  <div class="opts">
+  <div class="opts" id="dev-options">
     <label>client_id<input id="dev-client" value="localoidc-dev"></label>
     <label>Access token audience<input id="dev-audience" placeholder="defaults to client_id"></label>
     <label>Scope<input id="dev-scope" value="{scope}"></label>

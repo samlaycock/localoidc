@@ -14,6 +14,9 @@ pub struct Field {
     pub default: Value,
     #[serde(skip_serializing_if = "str::is_empty")]
     pub help: &'static str,
+    /// Less commonly needed claims, tucked behind "Show all claims" in the UI.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub advanced: bool,
 }
 
 impl Field {
@@ -24,16 +27,16 @@ impl Field {
 }
 
 fn s(name: &'static str, label: &'static str, default: &str) -> Field {
-    Field { name, label, kind: "string", default: json!(default), help: "" }
+    Field { name, label, kind: "string", default: json!(default), help: "", advanced: false }
 }
 fn b(name: &'static str, label: &'static str, default: bool) -> Field {
-    Field { name, label, kind: "bool", default: json!(default), help: "" }
+    Field { name, label, kind: "bool", default: json!(default), help: "", advanced: false }
 }
 fn n(name: &'static str, label: &'static str, default: i64) -> Field {
-    Field { name, label, kind: "number", default: json!(default), help: "" }
+    Field { name, label, kind: "number", default: json!(default), help: "", advanced: false }
 }
 fn j(name: &'static str, label: &'static str, default: Value) -> Field {
-    Field { name, label, kind: "json", default, help: "" }
+    Field { name, label, kind: "json", default, help: "", advanced: false }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,7 +114,16 @@ impl Preset {
 
 pub fn all() -> &'static [Preset] {
     static PRESETS: OnceLock<Vec<Preset>> = OnceLock::new();
-    PRESETS.get_or_init(build)
+    PRESETS.get_or_init(|| {
+        let mut presets = build();
+        for preset in &mut presets {
+            let advanced = advanced_fields(preset.id);
+            for field in &mut preset.fields {
+                field.advanced = advanced.contains(&field.name);
+            }
+        }
+        presets
+    })
 }
 
 pub fn get(id: &str) -> Option<&'static Preset> {
@@ -126,13 +138,43 @@ pub fn generic() -> &'static Preset {
     &all()[0]
 }
 
+/// Claims shown only after "Show all claims"; everything else is a common claim.
+fn advanced_fields(preset: &str) -> &'static [&'static str] {
+    match preset {
+        "generic" => &[
+            "middle_name",
+            "nickname",
+            "picture",
+            "profile",
+            "website",
+            "gender",
+            "birthdate",
+            "zoneinfo",
+            "locale",
+            "updated_at",
+            "phone_number",
+            "phone_number_verified",
+            "address",
+        ],
+        "google" => &["given_name", "family_name", "picture", "locale"],
+        "github" => &["avatar_url", "html_url", "company", "location", "bio", "node_id", "type", "site_admin"],
+        "microsoft" => &["groups"],
+        "facebook" => &["first_name", "last_name", "picture"],
+        "auth0" => &["nickname", "picture", "updated_at"],
+        "keycloak" => &["given_name", "family_name", "resource_access"],
+        "gitlab" => &["nickname", "profile", "picture", "groups_direct"],
+        "discord" => &["discriminator", "avatar", "locale", "mfa_enabled"],
+        _ => &[],
+    }
+}
+
 const NAME: &str = "Jane Developer";
 
 fn build() -> Vec<Preset> {
     vec![
         Preset {
             id: "generic",
-            name: "Generic OIDC",
+            name: "Custom (generic OIDC)",
             protocol: "oidc",
             description: "Every standard OpenID Connect claim, plus a few common extras (groups, roles).",
             color: "#6366f1",
