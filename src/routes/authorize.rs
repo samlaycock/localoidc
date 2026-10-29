@@ -331,8 +331,7 @@ pub async fn handle_authorize(
                 (preset, claims, Map::new())
             }
         };
-        crate::util::merge_claims(&mut claims, &overrides);
-        preset.ensure_sub(&mut claims);
+        preset.apply_overrides(&mut claims, &overrides);
         return complete(state, tenant, &req, preset.id, claims, access, None);
     }
 

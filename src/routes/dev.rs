@@ -68,9 +68,8 @@ pub fn mint(state: &AppState, tenant: &Tenant, req: DevTokenRequest) -> Result<V
             (preset, claims, Map::new())
         }
     };
-    merge_claims(&mut claims, &req.claims);
+    preset.apply_overrides(&mut claims, &req.claims);
     merge_claims(&mut access_claims, &req.access_token_claims);
-    preset.ensure_sub(&mut claims);
     let scope = req.scope.unwrap_or_else(|| preset.default_scope.to_string());
     let grant = Grant {
         client_id: req.client_id.unwrap_or_else(|| "localoidc-dev".into()),

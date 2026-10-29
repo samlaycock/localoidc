@@ -275,9 +275,8 @@ fn password(
             (preset, claims, Map::new())
         }
     };
-    crate::util::merge_claims(&mut claims, &dev_claims(params, "dev_claims")?);
+    preset.apply_overrides(&mut claims, &dev_claims(params, "dev_claims")?);
     crate::util::merge_claims(&mut access_claims, &dev_claims(params, "dev_access_claims")?);
-    preset.ensure_sub(&mut claims);
     let grant = Grant {
         client_id: client_id.unwrap_or_else(|| "localoidc-dev".into()),
         scope: params.get("scope").cloned().unwrap_or_else(|| preset.default_scope.into()),
