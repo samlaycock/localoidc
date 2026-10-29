@@ -1,0 +1,155 @@
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+use crate::config::Config;
+use crate::keys::Keys;
+use crate::store::{Store, Table};
+use crate::util::value_to_string;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub keys: Arc<Keys>,
+    pub store: Arc<Store>,
+}
+
+impl AppState {
+    /// Opens `<data_dir>/state.db`, or an in-memory SQLite database when there is no data dir.
+    pub fn new(config: Config, keys: Arc<Keys>) -> anyhow::Result<Self> {
+        let db = config.data_dir.as_ref().map(|d| d.join("state.db"));
+        let store = Store::open(db.as_deref())?;
+        // Clients from the config file always win over stale copies in the database.
+        for client in &config.clients {
+            store.put(Table::Clients, &client.client_id, client, None);
+        }
+        Ok(Self { config: Arc::new(config), keys, store: Arc::new(store) })
+    }
+
+    pub fn client(&self, client_id: &str) -> Option<Client> {
+        self.store.get(Table::Clients, client_id)
+    }
+
+    /// Drop expired codes, tokens, sessions and device grants.
+    pub fn purge_expired(&self) {
+        self.store.purge_expired();
+    }
+}
+
+/// A registered client. Unknown clients are accepted unless `strict_clients` is on.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Client {
+    pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    pub redirect_uris: Vec<String>,
+    pub post_logout_redirect_uris: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_method: Option<String>,
+}
+
+/// Everything needed to (re)issue tokens for an authenticated user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Grant {
+    pub client_id: String,
+    pub scope: String,
+    pub preset: String,
+    /// Identity claims (ID token + userinfo).
+    pub claims: Map<String, Value>,
+    /// Extra claims only placed in access tokens.
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub access_claims: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub auth_time: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audience: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acr: Option<String>,
+}
+
+impl Grant {
+    pub fn sub(&self) -> String {
+        self.claims.get("sub").map(value_to_string).unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthRequest {
+    pub id: String,
+    pub created: i64,
+    pub tenant: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub response_type: String,
+    pub response_mode: String,
+    pub scope: String,
+    pub state: Option<String>,
+    pub nonce: Option<String>,
+    pub code_challenge: Option<String>,
+    pub code_challenge_method: Option<String>,
+    pub prompt: Vec<String>,
+    pub max_age: Option<i64>,
+    pub login_hint: Option<String>,
+    pub acr_values: Option<String>,
+    pub audience: Vec<String>,
+}
+
+impl AuthRequest {
+    pub fn has_type(&self, t: &str) -> bool {
+        self.response_type.split_whitespace().any(|x| x == t)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeEntry {
+    pub grant: Grant,
+    pub tenant: String,
+    pub redirect_uri: String,
+    pub code_challenge: Option<String>,
+    pub code_challenge_method: Option<String>,
+    pub exp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpaqueToken {
+    pub grant: Grant,
+    pub iat: i64,
+    pub exp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub preset: String,
+    pub claims: Map<String, Value>,
+    pub access_claims: Map<String, Value>,
+    pub auth_time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DeviceStatus {
+    Pending,
+    Approved(Box<Grant>),
+    Denied,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceEntry {
+    pub device_code: String,
+    pub user_code: String,
+    pub tenant: String,
+    pub client_id: String,
+    pub scope: String,
+    pub audience: Vec<String>,
+    pub exp: i64,
+    pub interval: i64,
+    pub last_poll: i64,
+    pub status: DeviceStatus,
+}

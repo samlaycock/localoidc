@@ -1,0 +1,128 @@
+# localoidc
+
+A local OpenID Connect / OAuth 2.0 provider for offline development and testing. It's a single Rust binary with no external services.
+
+- **Claims editor instead of a password prompt.** At login you pick a provider to emulate and set exactly what goes into the tokens.
+- **Provider emulation.** It can emulate Google, GitHub, Microsoft Entra ID, Facebook, Apple, Auth0, Okta, Keycloak, GitLab, Discord and AWS Cognito. That covers their claim shapes, token formats and provider-specific endpoints such as GitHub's `/user` or Graph's `/me`.
+- **Custom claims everywhere.** The login UI, the device flow, the token generator, the dev API and the CLI all accept custom claims. You can also override reserved claims (`aud`, `exp`, …) for negative tests.
+- **Mint tokens without a login.** You can do it from a web page (`/dev`), a JSON API (`/dev/api/token`) or the CLI (`localoidc token`).
+
+## Quick start
+
+```sh
+cargo run --release            # http://localhost:9400
+```
+
+Point your app at the issuer `http://localhost:9400`. Any `client_id`, `client_secret` and `redirect_uri` is accepted unless you declare clients in `localoidc.toml`.
+
+| What | Where |
+|---|---|
+| Discovery | `/.well-known/openid-configuration` (also `/.well-known/oauth-authorization-server`) |
+| JWKS | `/jwks`, `/.well-known/jwks.json` |
+| Authorization | `/authorize` (GET/POST) |
+| Token | `/token` |
+| UserInfo | `/userinfo` |
+| Introspection (RFC 7662) | `/introspect` |
+| Revocation (RFC 7009) | `/revoke` |
+| RP-initiated logout | `/end_session` |
+| Device authorization (RFC 8628) | `/device_authorization`, verification page `/device` |
+| Pushed authorization requests (RFC 9126) | `/par` |
+| Dynamic client registration (RFC 7591) | `/register` |
+| Token generator UI (non-standard) | `/dev` |
+| Token API (non-standard) | `/dev/api/token` |
+| Built-in test redirect target | `/callback` |
+
+### Supported protocol features
+
+- Response types: `code`, `id_token`, `id_token token`, `code id_token`, `code token`, `code id_token token`, `token` and `none`.
+- Response modes: `query`, `fragment` and `form_post`. The authorization response includes `iss` (RFC 9207).
+- PKCE with `S256` and `plain`.
+- `nonce`, `state`, `prompt` (`none`, `login`, `consent`, `select_account`), `max_age`, `login_hint`, `acr_values`, and `resource`/`audience`.
+- ID tokens include `at_hash`, `c_hash`, `auth_time`, `sid` and `azp`.
+- Request objects (`request=`): the parameters are read from the JWT payload, but its signature is not verified.
+- Grants: `authorization_code`, `refresh_token` (including scope down-scoping), `client_credentials`, `password`, `device_code` and token exchange (RFC 8693).
+- Client authentication: `client_secret_basic`, `client_secret_post` and `none`. `private_key_jwt` and `client_secret_jwt` assertions are accepted without verification.
+- Signing: ID and access tokens are signed with RS256. Access tokens follow RFC 9068 (`typ: at+jwt`). Refresh tokens are signed JWTs too, so they keep working after a restart.
+- Sessions use a cookie, so `prompt=none` silent auth works. A "Continue as…" shortcut appears on the next login.
+
+Not implemented: front-/back-channel logout, `check_session_iframe`, encrypted tokens, signed/encrypted userinfo, the `claims` request parameter, and JARM.
+
+## Provider emulation
+
+There are two ways to use the presets:
+
+1. **Pick one at login.** On the root issuer, the login page has a provider picker that switches the claim template. Your choice is remembered in the session.
+2. **Use a provider issuer.** Every preset is also served as its own issuer at `/p/<preset>`, e.g. `http://localhost:9400/p/google`. It has its own discovery document and provider-specific endpoint aliases, so you can point SDKs that hard-code a provider's paths at it.
+
+| Preset | Notes | Extra endpoints under `/p/<preset>` |
+|---|---|---|
+| `generic` | Standard OIDC claims, plus `groups` and `roles` | – |
+| `google` | 21-digit `sub`, `hd` for Workspace | `/o/oauth2/v2/auth`, `/oauth2/v3/userinfo`, `/tokeninfo` |
+| `github` | OAuth2 with opaque `gho_` tokens. `response_type` is optional. The token endpoint returns form-encoded responses unless you send `Accept: application/json` | `/login/oauth/authorize`, `/login/oauth/access_token`, `/user`, `/user/emails` |
+| `microsoft` | `oid`, `tid`, `ver: 2.0`, `scp` | `/oauth2/v2.0/authorize`, `/oauth2/v2.0/token`, `/v1.0/me` (Graph shape) |
+| `facebook` | Opaque `EAAB…` tokens | `/{version}/dialog/oauth`, `/{version}/oauth/access_token`, `/me?fields=…` |
+| `apple` | Private relay email, `real_user_status` | `/auth/authorize`, `/auth/token`, `/auth/keys` |
+| `auth0` | Namespaced custom claims | `/oauth/token` |
+| `okta` | `cid`, `uid`, `scp`, `ver` | `/v1/authorize`, `/v1/token`, `/v1/userinfo`, `/v1/keys`, … |
+| `keycloak` | `realm_access`, `resource_access`, `typ` | `/protocol/openid-connect/{auth,token,userinfo,certs,logout}` |
+| `gitlab` | `groups`, `groups_direct` | `/oauth/authorize`, `/oauth/token`, `/api/v4/user` |
+| `discord` | Snowflake ids | `/oauth2/authorize`, `/api/oauth2/token`, `/api/users/@me` |
+| `cognito` | `cognito:username`, `cognito:groups`, `token_use` | `/oauth2/authorize`, `/oauth2/token`, `/oauth2/userInfo` |
+
+`localoidc presets` lists all the presets.
+
+## Minting tokens for development and tests
+
+**Web page:** open `http://localhost:9400/dev` (or `/p/<preset>/dev`). Set the claims and generate tokens. The page also shows copyable `export` lines, curl snippets for userinfo and refresh, and the equivalent API call.
+
+**JSON API:**
+
+```sh
+# Quick GET: unknown query params become claims (values are parsed as JSON when possible).
+curl -s 'http://localhost:9400/dev/api/token?email=me@example.com&roles=["admin"]'
+
+# Full POST. `claims` are merged over the preset defaults; a null value removes a claim.
+curl -s -X POST http://localhost:9400/dev/api/token -H 'content-type: application/json' -d '{
+  "preset": "google",
+  "client_id": "my-app",
+  "audience": "api://orders",
+  "scope": "openid email",
+  "claims": { "email": "me@acme.dev", "hd": "acme.dev", "picture": null },
+  "access_token_claims": { "permissions": ["orders:write"] },
+  "expires_in": 300,
+  "refresh_token": true
+}'
+```
+
+The response is a normal token response plus `id_token_claims`, `access_token_claims` and `issuer`. Other options are `defaults: false` (start from an empty claim set), `id_token: false` and `nonce`.
+
+**CLI:** this uses the same signing key and database, so the server doesn't need to be running.
+
+```sh
+export TOKEN=$(localoidc token --format access -c email=me@example.com -c 'roles=["admin"]')
+localoidc token --preset microsoft --audience api://orders --access-claim tenant=t1
+```
+
+### Automating browser logins (Playwright, Cypress, …)
+
+- Add `dev_claims=<JSON or base64url JSON>` to an `/authorize` request. It signs in immediately with the preset defaults merged with those claims. `dev_preset=<id>` picks the preset.
+- Alternatively, start the server with `--auto-login` so every authorization request signs in with the preset defaults. A `login_hint` sets the email or username.
+- The `password` and `client_credentials` grants accept `dev_claims` and `dev_access_claims` form parameters.
+
+## Configuration
+
+Settings come from CLI flags, `LOCALOIDC_*` environment variables, or `localoidc.toml`. See [`localoidc.example.toml`](localoidc.example.toml) and `localoidc --help`.
+
+- All state lives in `~/.localoidc/`: the signing key in `signing-key.pem`, and everything else in the SQLite database `state.db`. That covers sessions, authorization codes, pending logins, device codes, opaque tokens, the revocation list and dynamically registered clients, so a restart loses nothing. Each kind of record has its own table (`key`, JSON `value`, `expires_at`). Expired rows are purged every minute. Delete `state.db` to start fresh. If there's no data directory, an in-memory SQLite database is used.
+- When running in Docker with both browser and backend access, set `--issuer` to a URL both can reach, or use `--dynamic-issuer`.
+
+```sh
+docker build -t localoidc . && docker run -p 9400:9400 -v localoidc:/data localoidc
+```
+
+## Development
+
+```sh
+cargo test     # integration tests for every flow
+cargo clippy --all-targets
+```

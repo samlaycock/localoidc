@@ -1,0 +1,27 @@
+# Copy to ./localoidc.toml (picked up automatically) or pass --config <path>.
+# Every setting is optional; CLI flags and LOCALOIDC_* env vars take precedence.
+
+# host = "127.0.0.1"          # use "0.0.0.0" in Docker
+# port = 9400
+# issuer = "http://localhost:9400"
+# dynamic_issuer = false      # derive the issuer from the Host header
+# default_preset = "generic"  # claim shape used on the root issuer
+# auto_login = false          # skip the login UI (CI / headless e2e)
+# strict_clients = false      # reject client_ids not listed below
+# data_dir = "~/.localoidc"   # where the signing key is persisted
+# ephemeral_keys = false
+# access_token_ttl = 3600
+# id_token_ttl = 3600
+# refresh_token_ttl = 2592000
+# code_ttl = 300
+# refresh_tokens = "always"   # always | offline_access | never
+# access_token_identity_claims = true  # copy email/name/roles... into JWT access tokens
+
+# Declared clients get their secret and redirect URIs enforced.
+# Undeclared clients are accepted with any secret/redirect_uri unless strict_clients = true.
+[[clients]]
+client_id = "my-web-app"
+client_secret = "dev-secret"
+client_name = "My Web App"
+redirect_uris = ["http://localhost:3000/api/auth/callback"]
+post_logout_redirect_uris = ["http://localhost:3000/"]
