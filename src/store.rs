@@ -176,6 +176,27 @@ impl Store {
         log(rows, "select", table).unwrap_or_default().iter().filter_map(|j| serde_json::from_str(j).ok()).collect()
     }
 
+    /// All unexpired records with their keys and expiry.
+    pub fn entries<T: DeserializeOwned>(&self, table: Table) -> Vec<(String, T, Option<i64>)> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .prepare(&format!(
+                "SELECT key, value, expires_at FROM {} WHERE expires_at IS NULL OR expires_at > ?1",
+                table.name()
+            ))
+            .and_then(|mut stmt| {
+                stmt.query_map(params![self.clock.now()], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()
+            });
+        log(rows, "select", table)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(k, v, exp)| Some((k, serde_json::from_str(&v).ok()?, exp)))
+            .collect()
+    }
+
     /// Read-modify-write a record (expired or not) in one transaction. Returns `None` if missing.
     pub fn update<T, R>(&self, table: Table, key: &str, f: impl FnOnce(&mut T) -> R) -> Option<R>
     where

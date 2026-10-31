@@ -433,6 +433,23 @@
     $('dev-fault-clear').addEventListener('click', () => faultRequest('DELETE', data.faultsApi));
     document.querySelectorAll('[data-fault]').forEach((btn) => btn.addEventListener('click', () =>
       faultRequest('DELETE', `${data.faultsApi}/${btn.dataset.fault}`)));
+
+    // Sessions: ending one sends back-channel logout tokens; reload to show the result.
+    document.querySelectorAll('[data-session]').forEach((btn) => btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${data.sessionsApi}/${encodeURIComponent(btn.dataset.session)}`, { method: 'DELETE' });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error_description || res.statusText);
+        const failed = json.deliveries.filter((d) => d.error);
+        if (failed.length) alert(`Session ended, but ${failed.length} logout ${failed.length === 1 ? 'delivery' : 'deliveries'} failed:\n${failed.map((d) => `${d.client_id}: ${d.error}`).join('\n')}`);
+        location.hash = 'sessions';
+        location.reload();
+      } catch (err) {
+        btn.disabled = false;
+        alert(`Ending the session failed: ${err.message}`);
+      }
+    }));
     $('dev-generate').addEventListener('click', async () => {
       const { claims, access, errors } = build();
       if (errors.length) { refresh(); return; }
@@ -580,7 +597,8 @@
     const tr = h('tr', { class: `req-row${bad ? ' failed' : ''}${expanded.has(e.id) ? ' open' : ''}`, onclick: toggle },
       h('td', { class: 'mono' }, time(e.at)),
       h('td', {}, e.method),
-      h('td', { class: 'mono' }, e.issuer !== 'root' ? h('span', { class: 'req-issuer' }, e.issuer) : null, e.endpoint),
+      h('td', { class: 'mono' }, e.outgoing ? h('span', { class: 'req-issuer', title: 'Sent by localoidc' }, '→ out') : null,
+        e.issuer !== 'root' ? h('span', { class: 'req-issuer' }, e.issuer) : null, e.endpoint),
       h('td', { class: 'mono' }, e.client_id || '–'),
       h('td', {}, bad && e.error ? h('span', { class: 'req-error' }, e.error) : e.outcome),
       h('td', {}, h('span', { class: `chip ${bad ? 'bad' : 'ok'}` }, String(e.status))),

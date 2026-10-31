@@ -1358,3 +1358,158 @@ async fn faults_fail_matching_requests() {
     assert_eq!(arm(&app, json!({ "endpoint": "token", "status": 200 })).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(arm(&app, json!({ "endpoint": "nope" })).await.status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+type Received = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// A stand-in for apps' back-channel logout endpoints: `/ok` accepts tokens, `/fail` answers 500.
+async fn logout_receiver() -> (String, Received) {
+    let received: Received = Arc::default();
+    let log = received.clone();
+    let handler = move |axum::extract::Path(outcome): axum::extract::Path<String>, body: String| {
+        let log = log.clone();
+        async move {
+            let token = url::form_urlencoded::parse(body.as_bytes())
+                .find(|(k, _)| k == "logout_token")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            log.lock().unwrap().push((outcome.clone(), token));
+            if outcome == "ok" { StatusCode::OK } else { StatusCode::INTERNAL_SERVER_ERROR }
+        }
+    };
+    let app = Router::new().route("/{outcome}", axum::routing::post(handler));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, received)
+}
+
+#[tokio::test]
+async fn backchannel_logout() {
+    let (base, received) = logout_receiver().await;
+    let client = |id: &str, uri: Option<String>| Client {
+        client_id: id.into(),
+        redirect_uris: vec![CB.into()],
+        backchannel_logout_uri: uri,
+        ..Default::default()
+    };
+    let (app, state) = app_with(Config {
+        clients: vec![client("rp1", Some(format!("{base}/ok"))), client("rp2", Some(format!("{base}/fail")))],
+        ..Default::default()
+    });
+    let authorize = |client: &str, extra: &str| {
+        format!("/authorize?client_id={client}&redirect_uri={}&response_type=code&scope=openid{extra}", enc(CB))
+    };
+    let exchange = |client: &'static str, code: String| {
+        let app = app.clone();
+        async move {
+            post_form(
+                &app,
+                "/token",
+                &[("grant_type", "authorization_code"), ("code", &code), ("client_id", client), ("redirect_uri", CB)],
+            )
+            .await
+            .json()
+        }
+    };
+    let login = |client: &'static str| {
+        let app = app.clone();
+        let uri = authorize(client, &format!("&dev_claims={}", enc(r#"{"sub":"u1"}"#)));
+        async move {
+            let res = get(&app, &uri).await;
+            (res.cookie(), query_param(&res.location(), "code").unwrap())
+        }
+    };
+
+    // One session used by rp1 (twice, once for offline access), rp2 and an unregistered rp3.
+    let (cookie, code) = login("rp1").await;
+    let sid = cookie.split_once('=').unwrap().1.to_string();
+    let online = exchange("rp1", code).await;
+    let silent = |client: &str, extra: &str| {
+        let (app, uri, cookie) = (app.clone(), authorize(client, &format!("{extra}&prompt=none")), cookie.clone());
+        async move { query_param(&get_with(&app, &uri, &[("cookie", &cookie)]).await.location(), "code").unwrap() }
+    };
+    let offline = exchange("rp1", silent("rp1", "%20offline_access").await).await;
+    silent("rp2", "").await;
+    silent("rp3", "").await;
+    let sessions = get(&app, "/dev/api/sessions").await.json();
+    assert_eq!(sessions[0]["sid"], sid);
+    assert_eq!(sessions[0]["clients"], json!(["rp1", "rp2", "rp3"]));
+
+    // RP-initiated logout notifies the registered clients, including one that fails.
+    let res = get_with(&app, "/end_session", &[("cookie", &cookie)]).await;
+    assert_eq!(res.status, StatusCode::OK);
+    let got = received.lock().unwrap().clone();
+    assert_eq!(got.iter().map(|(o, _)| o.as_str()).collect::<std::collections::BTreeSet<_>>(), ["fail", "ok"].into());
+    let token = &got.iter().find(|(o, _)| o == "ok").unwrap().1;
+    let (header, claims) = state.keys.verify(token).expect("signed by localoidc");
+    assert_eq!(header["typ"], "logout+jwt");
+    assert_eq!(
+        (&claims["iss"], &claims["aud"], &claims["sub"], &claims["sid"]),
+        (&json!(ISS), &json!("rp1"), &json!("u1"), &json!(sid))
+    );
+    assert!(claims["events"].get("http://schemas.openid.net/event/backchannel-logout").is_some());
+    assert!(claims.get("nonce").is_none());
+    assert_eq!(claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(), 120);
+    assert_eq!(get(&app, "/dev/api/sessions").await.json(), json!([]));
+
+    // Refresh tokens die with the session, unless they were issued for offline access.
+    let refresh = |token: &Value| {
+        let (app, token) = (app.clone(), token["refresh_token"].as_str().unwrap().to_string());
+        async move {
+            post_form(
+                &app,
+                "/token",
+                &[("grant_type", "refresh_token"), ("refresh_token", &token), ("client_id", "rp1")],
+            )
+            .await
+        }
+    };
+    assert_eq!(refresh(&online).await.json()["error"], "invalid_grant");
+    assert_eq!(refresh(&offline).await.status, StatusCode::OK);
+
+    // The inspector shows the deliveries as outgoing requests.
+    let entries = get(&app, "/dev/api/requests").await.json()["entries"].as_array().unwrap().clone();
+    let outgoing: Vec<_> = entries.iter().filter(|e| e["outgoing"] == true).collect();
+    assert_eq!(outgoing.len(), 2);
+    let failed = outgoing.iter().find(|e| e["client_id"] == "rp2").unwrap();
+    assert_eq!((&failed["status"], &failed["error"]), (&json!(500), &json!("logout_delivery_failed")));
+
+    // Without a cookie, the session named by id_token_hint ends.
+    let (_, code) = login("rp1").await;
+    let id_token = exchange("rp1", code).await["id_token"].as_str().unwrap().to_string();
+    get(&app, &format!("/end_session?id_token_hint={id_token}")).await;
+    assert_eq!(received.lock().unwrap().len(), 3);
+
+    // Ending a session over the API ("logged out elsewhere").
+    let (cookie, _) = login("rp1").await;
+    let sid = cookie.split_once('=').unwrap().1.to_string();
+    let end = || send(&app, Request::delete(format!("/dev/api/sessions/{sid}")).body(Body::empty()).unwrap());
+    let res = end().await.json();
+    assert_eq!(res["deliveries"], json!([{ "client_id": "rp1", "uri": format!("{base}/ok"), "status": 200 }]));
+    assert_eq!(received.lock().unwrap().len(), 4);
+    assert_eq!(end().await.status, StatusCode::NOT_FOUND);
+
+    // Discovery and dynamic registration.
+    let disc = get(&app, "/.well-known/openid-configuration").await.json();
+    assert_eq!(
+        (&disc["backchannel_logout_supported"], &disc["backchannel_logout_session_supported"]),
+        (&json!(true), &json!(true))
+    );
+    let register = |meta: Value| {
+        let app = app.clone();
+        async move {
+            let req = Request::post("/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(meta.to_string()))
+                .unwrap();
+            send(&app, req).await
+        }
+    };
+    let res = register(json!({ "redirect_uris": [CB], "backchannel_logout_uri": "not a url" })).await;
+    assert_eq!(res.json()["error"], "invalid_client_metadata");
+    let res = register(json!({ "redirect_uris": [CB], "backchannel_logout_uri": format!("{base}/ok"), "backchannel_logout_session_required": true })).await;
+    assert_eq!(res.status, StatusCode::CREATED);
+    let registered = state.client(res.json()["client_id"].as_str().unwrap()).unwrap();
+    assert_eq!(registered.backchannel_logout_uri, Some(format!("{base}/ok")));
+    assert!(registered.backchannel_logout_session_required);
+}

@@ -295,6 +295,15 @@ pub fn verify(state: &AppState, token: &str) -> Option<Verified> {
             .unwrap_or_else(|| grant_from_claims(&claims)),
         Kind::Id => grant_from_claims(&claims),
     };
+    // Refresh tokens die with their session, unless they were issued for offline access
+    // (Back-Channel Logout 1.0 §2.7).
+    if kind == Kind::Refresh
+        && let Some(sid) = &grant.sid
+        && !has_scope(&grant.scope, "offline_access")
+        && state.store.contains(Table::Revoked, &crate::backchannel::ended_key(sid))
+    {
+        return None;
+    }
     let iat = claims.get("iat").and_then(Value::as_i64).unwrap_or_default();
     Some(Verified { kind, claims, grant, exp, iat, jti })
 }

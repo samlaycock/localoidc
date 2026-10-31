@@ -46,6 +46,17 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
         )
         .into_response();
     }
+    let backchannel_logout_uri = meta.get("backchannel_logout_uri").and_then(Value::as_str).map(String::from);
+    if let Some(uri) = &backchannel_logout_uri
+        && (url::Url::parse(uri).is_err() || uri.contains('#'))
+    {
+        return OAuthError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "backchannel_logout_uri must be an absolute URL without a fragment",
+        )
+        .into_response();
+    }
     let auth_method =
         meta.get("token_endpoint_auth_method").and_then(Value::as_str).unwrap_or("client_secret_basic").to_string();
     let client = Client {
@@ -58,6 +69,11 @@ pub async fn register(State(state): State<AppState>, Json(meta): Json<Value>) ->
         jwks: meta.get("jwks").cloned(),
         jwks_uri: meta.get("jwks_uri").and_then(Value::as_str).map(String::from),
         userinfo_signed_response_alg: userinfo_alg,
+        backchannel_logout_uri,
+        backchannel_logout_session_required: meta
+            .get("backchannel_logout_session_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
 
     meta.insert("client_id".into(), json!(client.client_id));

@@ -81,6 +81,12 @@ pub struct Client {
     /// `RS256` to receive userinfo as a signed JWT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub userinfo_signed_response_alg: Option<String>,
+    /// Where to POST logout tokens when a session this client used ends (Back-Channel Logout 1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_logout_uri: Option<String>,
+    /// The client requires `sid` in logout tokens (localoidc always includes it).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub backchannel_logout_session_required: bool,
 }
 
 /// Everything needed to (re)issue tokens for an authenticated user.
@@ -194,6 +200,12 @@ pub struct Session {
     pub claims: Map<String, Value>,
     pub access_claims: Map<String, Value>,
     pub auth_time: i64,
+    /// Clients that received tokens during this session, to notify when it ends.
+    #[serde(default)]
+    pub clients: Vec<String>,
+    /// The issuer that created the session (logout tokens are signed as it).
+    #[serde(default)]
+    pub issuer: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

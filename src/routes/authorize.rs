@@ -414,12 +414,20 @@ fn complete(
     existing: Option<(String, i64)>,
 ) -> Response {
     let (sid, auth_time) = existing.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), state.now()));
-    state.store.put(
-        Table::Sessions,
-        &sid,
-        &Session { preset: preset.into(), claims: claims.clone(), access_claims: access_claims.clone(), auth_time },
-        Some(state.now() + state.config.refresh_token_ttl),
-    );
+    // Remember every client that used the session, for back-channel logout.
+    let mut clients = state.store.get::<Session>(Table::Sessions, &sid).map(|s| s.clients).unwrap_or_default();
+    if !clients.contains(&req.client_id) {
+        clients.push(req.client_id.clone());
+    }
+    let session = Session {
+        preset: preset.into(),
+        claims: claims.clone(),
+        access_claims: access_claims.clone(),
+        auth_time,
+        clients,
+        issuer: tenant.issuer.clone(),
+    };
+    state.store.put(Table::Sessions, &sid, &session, Some(state.now() + state.config.refresh_token_ttl));
 
     let grant = Grant {
         client_id: req.client_id.clone(),

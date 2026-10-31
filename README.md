@@ -12,7 +12,7 @@ A local OpenID Connect / OAuth 2.0 provider for offline development and testing.
 - **Mint tokens without a login.** You can do it from a web page (`/dev`) or a JSON API (`/dev/api/token`).
 - **See why a request failed.** The request inspector at `/dev/requests` shows every request your app makes, what it sent and the exact reason anything was rejected.
 - **Built for automated tests.** Sign in from Playwright or Cypress with a single query parameter, or turn on auto-login. [Fault injection](#injecting-faults) and a [shifted clock](#shifting-the-clock) cover the unhappy paths. [Declared users](#declared-users) give a team and its CI the same named identities.
-- **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans.
+- **Spec-compliant.** It passes the OpenID Foundation conformance suite's Basic, Implicit, Hybrid, Form Post, Config, Dynamic, RP-initiated logout and back-channel logout plans.
 
 > [!WARNING]
 > localoidc is for development and testing only. It accepts any client by default, lets anyone sign in or mint tokens as any identity, and serves unauthenticated endpoints for minting tokens and rotating keys. Never expose it to the internet or use it to protect real data.
@@ -92,6 +92,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Declared users (non-standard) | `/dev/api/users` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
+| Sessions (non-standard) | `/dev/api/sessions` (GET), `/dev/api/sessions/{sid}` (DELETE) |
 | Fault injection (non-standard) | `/dev/api/faults` (GET/POST/DELETE), `/dev/api/faults/{id}` (DELETE) |
 | Request inspector (non-standard) | `/dev/requests`, `/dev/api/requests` (GET/DELETE) |
 | Built-in test redirect target | `/callback` |
@@ -112,8 +113,9 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 - Userinfo is returned as a signed JWT for clients registered with `userinfo_signed_response_alg=RS256`.
 - Reusing an authorization code revokes the tokens issued from it.
 - RP-initiated logout: registered clients must send a valid `id_token_hint` with a registered `post_logout_redirect_uri`, otherwise an error page is shown. Unregistered clients can redirect as long as they're identified by `client_id` or a hint.
+- [Back-channel logout](#back-channel-logout): when a session ends, clients that used it get a signed logout token.
 
-**Not implemented:** front- and back-channel logout, `check_session_iframe`, encrypted tokens and userinfo, unsigned ID tokens, pairwise subjects, JARM, and signing algorithms other than RS256.
+**Not implemented:** front-channel logout, `check_session_iframe`, encrypted tokens and userinfo, unsigned ID tokens, pairwise subjects, JARM, and signing algorithms other than RS256.
 
 ### Which claims go where
 
@@ -125,6 +127,25 @@ Set `claims_by_scope = true` for spec-strict behaviour (OIDC Core 5.4):
 - Claims requested explicitly with the `claims` request parameter (OIDC Core 5.5) are released where they were asked for.
 - Non-standard claims such as `roles`, `groups` or your custom claims go only in the access token.
 
+### Back-channel logout
+
+localoidc implements [OIDC Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html). A client opts in by registering a `backchannel_logout_uri`, in `localoidc.toml` or through dynamic registration:
+
+```toml
+[[clients]]
+client_id = "my-web-app"
+redirect_uris = ["http://localhost:3000/api/auth/callback"]
+backchannel_logout_uri = "http://localhost:3000/api/auth/backchannel-logout"
+```
+
+- localoidc remembers which clients received tokens during each browser session.
+- When the session ends, each of those clients that has a `backchannel_logout_uri` receives a POST with `logout_token=<JWT>`. That includes the client that started the logout. The logout token is signed like an ID token (`typ: logout+jwt`). It carries `iss`, `aud`, `iat`, `exp` (two minutes), `jti`, `sub`, `sid` and the back-channel logout `events` claim.
+- Sessions end through RP-initiated logout (`/end_session`, using the session cookie or the `sid` in `id_token_hint`) or through `DELETE /dev/api/sessions/{sid}`. The latter is the same as the user logging out somewhere else. `GET /dev/api/sessions` lists active sessions, and the `/dev` page has the same list with an **End session** button.
+- Deliveries happen before the logout response, with a 5 second timeout per client. A client that fails or is unreachable doesn't block the logout. Deliveries show up in the [request inspector](#inspecting-requests) as outgoing requests, with their status.
+- Refresh tokens issued during the session stop working when it ends, unless they were issued with `offline_access`.
+- Clients that aren't declared (accepted in the default lenient mode) have nowhere to receive a logout token, so they aren't notified.
+
+## Provider emulation
 ## Provider emulation
 
 There are two ways to use the presets:
@@ -318,7 +339,7 @@ Named identities go in `[[users]]`. See [Declared users](#declared-users).
 
 ## Conformance
 
-localoidc passes the [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite)'s Basic, Implicit, Hybrid, Form Post, Config, Dynamic and RP-initiated logout plans. The few expected skips are features that aren't implemented, such as unsigned ID tokens and pairwise subjects. To run the suite locally, use `./conformance/run.sh`. See [`conformance/README.md`](conformance/README.md).
+localoidc passes the [OpenID Foundation conformance suite](https://gitlab.com/openid/conformance-suite)'s Basic, Implicit, Hybrid, Form Post, Config, Dynamic, RP-initiated logout and back-channel logout plans. The few expected skips are features that aren't implemented, such as unsigned ID tokens and pairwise subjects. To run the suite locally, use `./conformance/run.sh`. See [`conformance/README.md`](conformance/README.md).
 
 ## Contributing
 

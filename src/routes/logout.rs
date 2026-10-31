@@ -9,7 +9,6 @@ use serde_json::Value;
 use crate::html::{error_page, message_page};
 use crate::routes::authorize::{clear_session_cookie, cookie_value};
 use crate::state::AppState;
-use crate::store::Table;
 use crate::tenant::Tenant;
 use crate::util::{merged_params, non_empty, value_to_string};
 
@@ -77,8 +76,12 @@ pub async fn end_session(
         None => None,
     };
 
-    if let Some(sid) = cookie_value(&headers, &tenant.cookie_name()) {
-        state.store.remove(Table::Sessions, &sid);
+    // End the browser's session, or the one named by the hint if there's no cookie, and send
+    // back-channel logout tokens to the clients that used it.
+    let sid = cookie_value(&headers, &tenant.cookie_name())
+        .or_else(|| hint.as_ref().and_then(|c| c.get("sid")).and_then(Value::as_str).map(String::from));
+    if let Some(sid) = sid {
+        crate::backchannel::end_session(&state, &sid, &tenant.issuer).await;
     }
     let mut resp = match redirect {
         Some(url) => Redirect::to(url.as_str()).into_response(),
