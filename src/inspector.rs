@@ -75,6 +75,9 @@ pub struct Entry {
     /// Where a redirect or form post went (without its parameters).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect: Option<String>,
+    /// A request localoidc made (e.g. a back-channel logout), rather than one it received.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub outgoing: bool,
 }
 
 impl Entry {
@@ -138,6 +141,11 @@ impl Inspector {
     }
 }
 
+/// Real time in Unix milliseconds.
+pub(crate) fn now_ms() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default()
+}
+
 /// Paths that are never recorded: static assets, health checks and the inspector itself.
 fn ignored(path: &str) -> bool {
     let within = strip_issuer(path).1;
@@ -175,6 +183,7 @@ fn category(endpoint: &str) -> &'static str {
 
 const SECRETS: &[&str] = &["client_secret", "password", "client_assertion"];
 const TOKENS: &[&str] = &[
+    "logout_token",
     "code",
     "code_verifier",
     "refresh_token",
@@ -314,7 +323,7 @@ pub async fn record(State(state): State<AppState>, request: Request, next: Next)
         return next.run(request).await;
     }
     let started = Instant::now();
-    let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or_default();
+    let at = now_ms();
     let method = request.method().to_string();
     let query = request.uri().query().unwrap_or_default().to_string();
     let request_type = content_type(request.headers());
@@ -393,6 +402,7 @@ pub async fn record(State(state): State<AppState>, request: Request, next: Next)
         error: error.map(|(code, _)| code),
         outcome,
         redirect,
+        outgoing: false,
     });
     Response::from_parts(parts, body)
 }
@@ -419,6 +429,7 @@ mod tests {
             error_description: None,
             outcome: String::new(),
             redirect: None,
+            outgoing: false,
         }
     }
 

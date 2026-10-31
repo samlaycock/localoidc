@@ -31,6 +31,7 @@ The suite keeps running afterwards. You can browse the detailed logs at https://
 | `formpost` | `oidcc-formpost-{basic,implicit,hybrid}-certification-test-plan` | static |
 | `dynamic` | `oidcc-dynamic-certification-test-plan` | dynamic |
 | `logout` | `oidcc-rp-initiated-logout-certification-test-plan` | dynamic |
+| `backchannel` | `oidcc-backchannel-rp-initiated-logout-certification-test-plan` | dynamic |
 
 ## Key rotation
 

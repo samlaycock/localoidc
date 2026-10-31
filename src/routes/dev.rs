@@ -344,6 +344,33 @@ pub async fn api_faults_clear(State(state): State<AppState>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+/// Non-standard: active browser sessions on every issuer.
+pub async fn api_sessions(State(state): State<AppState>) -> Response {
+    let sessions: Vec<Value> = state
+        .store
+        .entries::<crate::state::Session>(crate::store::Table::Sessions)
+        .iter()
+        .map(|(sid, session, exp)| crate::backchannel::describe(sid, session, *exp))
+        .collect();
+    (no_store(), Json(sessions)).into_response()
+}
+
+/// Non-standard: end a session as if the user logged out elsewhere, sending back-channel
+/// logout tokens to the clients that used it.
+pub async fn api_sessions_end(
+    State(state): State<AppState>,
+    tenant: Tenant,
+    axum::extract::Path(params): axum::extract::Path<HashMap<String, String>>,
+) -> Response {
+    let sid = params.get("sid").cloned().unwrap_or_default();
+    match crate::backchannel::end_session(&state, &sid, &tenant.issuer).await {
+        Some(deliveries) => (no_store(), Json(json!({ "sid": sid, "deliveries": deliveries }))).into_response(),
+        None => {
+            OAuthError::new(StatusCode::NOT_FOUND, "not_found", format!("no active session '{sid}'")).into_response()
+        }
+    }
+}
+
 pub async fn api_presets() -> impl IntoResponse {
     Json(presets::all())
 }
@@ -381,6 +408,47 @@ const FAULT_ERRORS: &[&str] = &[
     "consent_required",
     "interaction_required",
 ];
+
+/// Active sessions with "End session" buttons (the page script handles the clicks).
+fn session_list(state: &AppState) -> String {
+    let sessions = state.store.entries::<crate::state::Session>(crate::store::Table::Sessions);
+    if sessions.is_empty() {
+        return r#"<p class="muted small">No active sessions.</p>"#.into();
+    }
+    let items: String = sessions
+        .iter()
+        .map(|(sid, s, _)| {
+            let who = ["email", "name", "preferred_username", "login", "sub"]
+                .iter()
+                .find_map(|k| s.claims.get(*k).map(crate::util::value_to_string))
+                .unwrap_or_default();
+            let clients = if s.clients.is_empty() {
+                "no clients".to_string()
+            } else {
+                s.clients
+                    .iter()
+                    .map(|c| match state.client(c).and_then(|c| c.backchannel_logout_uri) {
+                        Some(_) => format!("<code>{}</code>", esc(c)),
+                        None => format!(
+                            r#"<code class="not-notified" title="No backchannel_logout_uri registered: won't be notified">{}</code>"#,
+                            esc(c)
+                        ),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                r#"<li><span><b>{who}</b> · {preset} · {clients}<br><small class="muted">sid <code>{sid_text}</code> · {issuer}</small></span><button class="btn small ghost" type="button" data-session="{sid_attr}">End session</button></li>"#,
+                who = esc(&who),
+                preset = esc(&s.preset),
+                sid_text = esc(sid),
+                issuer = esc(&s.issuer),
+                sid_attr = esc(sid),
+            )
+        })
+        .collect();
+    format!(r#"<ul class="fault-list session-list">{items}</ul>"#)
+}
 
 /// The armed faults as a list with remove buttons (the page script handles the clicks).
 fn fault_list(faults: &[crate::faults::Fault]) -> String {
@@ -472,6 +540,11 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
     <button class="btn ghost" id="dev-fault-clear" type="button"{clear_disabled}>Remove all</button>
   </div>
 </section>
+<section class="card" id="sessions">
+  <div class="eyebrow">Sessions</div>
+  <p class="muted">Browser sessions on every issuer. Ending one is like the user logging out elsewhere: clients that used it and registered a <code>backchannel_logout_uri</code> get a logout token (faded clients have none registered), and its refresh tokens stop working. Scripts can use <code>DELETE {sessions_api}/&lt;sid&gt;</code>.</p>
+  {session_list}
+</section>
 <section class="card">
   <div class="eyebrow">Signing key</div>
   <p class="muted">Tokens are signed with key <code id="dev-kid">{kid}</code>. Rotating creates a new key; the previous {kept} stay in the JWKS so tokens already issued keep verifying. Scripts can use <code>POST {rotate}</code>.</p>
@@ -497,6 +570,8 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
         clock_api = esc(&tenant.url("/dev/api/clock")),
         reset_disabled = if state.clock().offset() == 0 { " disabled" } else { "" },
         faults_api = esc(&tenant.url("/dev/api/faults")),
+        sessions_api = esc(&tenant.url("/dev/api/sessions")),
+        session_list = session_list(&state),
         fault_list = fault_list(&state.faults.list()),
         endpoint_options =
             FAULT_ENDPOINTS.iter().map(|e| format!(r#"<option value="{e}">{e}</option>"#)).collect::<String>(),
@@ -514,6 +589,7 @@ pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers
                 "rotateApi": tenant.url("/dev/api/rotate-keys"),
                 "clockApi": tenant.url("/dev/api/clock"),
                 "faultsApi": tenant.url("/dev/api/faults"),
+                "sessionsApi": tenant.url("/dev/api/sessions"),
             }),
         )),
     );

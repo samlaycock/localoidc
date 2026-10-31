@@ -25,7 +25,7 @@ LOCALOIDC_BIND="${LOCALOIDC_BIND:-127.0.0.1}"
 
 STATIC="configs/static.json"
 DYNAMIC="configs/dynamic.json"
-ALL_GROUPS="config basic implicit hybrid formpost dynamic logout"
+ALL_GROUPS="config basic implicit hybrid formpost dynamic logout backchannel"
 
 plans_for() {
     case "$1" in
@@ -40,6 +40,7 @@ plans_for() {
             ;;
         dynamic)  echo "oidcc-dynamic-certification-test-plan[response_type=code] $DYNAMIC" ;;
         logout)   echo "oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=dynamic_client] $DYNAMIC" ;;
+        backchannel) echo "oidcc-backchannel-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=dynamic_client] $DYNAMIC" ;;
         *) echo "unknown plan group '$1' (groups: $ALL_GROUPS)" >&2; return 1 ;;
     esac
 }

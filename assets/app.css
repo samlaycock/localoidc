@@ -277,3 +277,5 @@ textarea { resize: vertical; min-height: 36px; }
   border-left: 4px solid var(--warn); font-size: 13px;
 }
 .faults-form select { width: 100%; }
+.session-list li { border-left-color: var(--accent); }
+code.not-notified { opacity: .5; text-decoration: line-through; cursor: help; }

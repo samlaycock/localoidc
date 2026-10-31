@@ -88,7 +88,8 @@ pub async fn openid_configuration(State(state): State<AppState>, tenant: Tenant)
         "claims_parameter_supported": true,
         "authorization_response_iss_parameter_supported": true,
         "frontchannel_logout_supported": false,
-        "backchannel_logout_supported": false,
+        "backchannel_logout_supported": true,
+        "backchannel_logout_session_supported": true,
         "localoidc": {
             "preset": tenant.preset.map(|p| p.id),
             "dev_token_endpoint": u("/dev/api/token"),

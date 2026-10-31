@@ -46,6 +46,8 @@ fn issuer_routes() -> Router<AppState> {
         .route("/dev/api/requests", get(dev::api_requests).delete(dev::api_requests_clear))
         .route("/dev/api/faults", get(dev::api_faults).post(dev::api_faults_add).delete(dev::api_faults_clear))
         .route("/dev/api/faults/{id}", delete(dev::api_faults_remove))
+        .route("/dev/api/sessions", get(dev::api_sessions))
+        .route("/dev/api/sessions/{sid}", delete(dev::api_sessions_end))
 }
 
 pub fn router(state: AppState) -> Router {
