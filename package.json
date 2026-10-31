@@ -1,6 +1,6 @@
 {
   "name": "localoidc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Release tooling for localoidc. The version here is the source of truth; Cargo.toml follows it.",
   "repository": "github:samlaycock/localoidc",
