@@ -551,10 +551,19 @@ async fn auto_login_mode() {
 #[tokio::test]
 async fn pages_render() {
     let app = app();
-    for uri in ["/", "/dev", "/dev/requests", "/callback", "/p/google", "/p/github/dev", "/device"] {
+    for (uri, title) in [
+        ("/", "Home"),
+        ("/dev", "Token generator"),
+        ("/dev/requests", "Requests"),
+        ("/callback", "Callback"),
+        ("/p/google", "Home"),
+        ("/p/github/dev", "Token generator"),
+        ("/device", "Device sign-in"),
+    ] {
         let page = get(&app, uri).await;
         assert_eq!(page.status, StatusCode::OK, "{uri}");
         assert!(page.body.contains(r#"<script type="application/json" id="lo-page">"#), "{uri}");
+        assert!(page.body.contains(&format!("<title>{title} · localoidc</title>")), "{uri}");
     }
     // Each issuer's pages carry its prefix, for the app's links and API calls.
     assert!(get(&app, "/p/google/dev").await.body.contains(r#""prefix":"/p/google""#));

@@ -25,15 +25,24 @@ const router = createBrowserRouter(
       ErrorBoundary: RouteError,
       HydrateFallback: Loading,
       children: [
-        { index: true, Component: Home },
+        { index: true, Component: Home, handle: { title: "Home" } },
         {
           path: "dev",
           loader: devLoader,
           Component: DevPage,
           ErrorBoundary: RouteError,
+          handle: { title: "Token generator" },
         },
-        { path: "dev/requests", Component: Requests },
-        { path: "callback", Component: Callback },
+        {
+          path: "dev/requests",
+          Component: Requests,
+          handle: { title: "Requests" },
+        },
+        {
+          path: "callback",
+          Component: Callback,
+          handle: { title: "Callback" },
+        },
         // The protocol's pages (sign-in, device approval, errors), which the server describes.
         { path: "*", Component: ProtocolPage },
       ],

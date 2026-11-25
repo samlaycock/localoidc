@@ -291,7 +291,7 @@ pub async fn api_requests_clear(State(state): State<AppState>) -> StatusCode {
 
 /// The request inspector's page.
 pub async fn requests_page(tenant: Tenant) -> Response {
-    app_page(&tenant)
+    app_page(&tenant, "Requests")
 }
 
 /// Non-standard: the armed faults (see `crate::faults`).
@@ -472,5 +472,5 @@ pub async fn api_info(State(state): State<AppState>, tenant: Tenant) -> Response
 
 /// The token generator's page.
 pub async fn page_handler(tenant: Tenant) -> Response {
-    app_page(&tenant)
+    app_page(&tenant, "Token generator")
 }

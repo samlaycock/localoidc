@@ -53,8 +53,8 @@ pub fn shell(tenant: &Tenant, status: StatusCode, title: &str, view: Value, fall
     (status, [(header::CACHE_CONTROL, cache)], Html(html)).into_response()
 }
 
-/// A page of the dev tools: the app routes it.
-pub fn app_page(tenant: &Tenant) -> Response {
+/// A page of the dev tools: the app routes it (and keeps the title current as it does).
+pub fn app_page(tenant: &Tenant, title: &str) -> Response {
     let note = format!(
         r#"<noscript>{}</noscript>"#,
         card(&format!(
@@ -62,7 +62,7 @@ pub fn app_page(tenant: &Tenant) -> Response {
             esc(&tenant.url("/dev/api/token"))
         ))
     );
-    shell(tenant, StatusCode::OK, "localoidc", Value::Null, &note)
+    shell(tenant, StatusCode::OK, title, Value::Null, &note)
 }
 
 // The pages' plain HTML versions use the theme's colours (CSS variables), so they look like the
