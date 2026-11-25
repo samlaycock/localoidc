@@ -9,6 +9,7 @@ pub mod register;
 pub mod token;
 pub mod userinfo;
 
+use axum::extract::Path;
 use axum::routing::{any, delete, get, post};
 use axum::{Router, middleware};
 use tower_http::cors::CorsLayer;
@@ -38,6 +39,7 @@ fn issuer_routes() -> Router<AppState> {
         .route("/register", post(register::register))
         .route("/dev", get(dev::page_handler))
         .route("/dev/api/token", get(dev::api_token_get).post(dev::api_token_post))
+        .route("/dev/api/info", get(dev::api_info))
         .route("/dev/api/presets", get(dev::api_presets))
         .route("/dev/api/users", get(dev::api_users))
         .route("/dev/api/rotate-keys", post(dev::api_rotate_keys))
@@ -54,8 +56,11 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(issuer_routes())
         .nest("/p/{preset}", issuer_routes().merge(providers::routes()))
-        .route("/assets/app.css", get(pages::css))
-        .route("/assets/app.js", get(pages::js))
+        .route(
+            "/assets/{*path}",
+            get(|Path(path): Path<String>| async move { crate::html::asset(&format!("assets/{path}")) }),
+        )
+        .route("/favicon.svg", get(|| async { crate::html::asset("favicon.svg") }))
         .route("/health", get(|| async { "ok" }))
         .layer(middleware::from_fn_with_state(state.clone(), crate::faults::apply))
         .layer(middleware::from_fn_with_state(state.clone(), crate::inspector::record))

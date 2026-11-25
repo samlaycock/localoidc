@@ -152,6 +152,7 @@ fn ignored(path: &str) -> bool {
     path.starts_with("/assets/")
         || path == "/health"
         || path == "/favicon.ico"
+        || path == "/favicon.svg"
         || within == "/dev/requests"
         || within == "/dev/api/requests"
 }

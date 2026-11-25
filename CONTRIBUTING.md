@@ -4,7 +4,7 @@ Thanks for helping out. Bug reports, provider-emulation fixes and new features a
 
 ## Development
 
-You need a recent stable Rust toolchain. Node.js is only needed for changesets.
+You need a recent stable Rust toolchain. Node.js is needed for changesets, and the web UI needs Node.js (22.22+, 24.11+ or 26+) and [Bun](https://bun.com), its package manager.
 
 ```sh
 cargo run                        # serve on http://localhost:9400
@@ -14,9 +14,10 @@ cargo fmt
 docker build -t localoidc .      # the release image
 ```
 
-CI runs `cargo fmt --check`, clippy with `-D warnings` and `cargo test` on every pull request.
+CI runs `cargo fmt --check`, clippy with `-D warnings`, `cargo test` and the web UI's checks on every pull request.
 
-- The login, device and token generator pages share `assets/app.js` and `assets/app.css`. Both are compiled into the binary, so rebuild after changing them.
+- The web UI is a React app in `ui/`, built with stock shadcn/ui components. Its build output, `ui/dist`, is committed and compiled into the binary, so run `bun run check` and `bun run build` in `ui/` and commit `ui/dist` with any change to it. [`ui/README.md`](ui/README.md) covers working on it.
+- The sign-in and device pages are rendered by the app, but the server decides when to show them (`src/html.rs`) and sends a plain HTML version that works without JavaScript, for headless browsers such as the conformance suite's. Keep its **Sign in** button working.
 - Provider presets (claim shapes, defaults and endpoints) live in `src/presets.rs`. Provider-specific routes are in `src/routes/providers.rs`.
 
 If you change protocol behaviour, run the [OpenID conformance suite](conformance/README.md) (`./conformance/run.sh`) as well. It needs Docker.
