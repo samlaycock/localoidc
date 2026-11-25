@@ -1,5 +1,11 @@
 import { RotateCwIcon, TriangleAlertIcon } from "lucide-react"
-import { isRouteErrorResponse, Outlet, useRouteError } from "react-router"
+import * as React from "react"
+import {
+  isRouteErrorResponse,
+  Outlet,
+  useMatches,
+  useRouteError,
+} from "react-router"
 
 import { AppHeader } from "@/components/app-header"
 import { Banners } from "@/components/banners"
@@ -16,8 +22,21 @@ import {
 import { Toaster } from "@/components/ui/sonner"
 import { Spinner } from "@/components/ui/spinner"
 
+/** The page's title, from the deepest route that names one (protocol pages keep the server's). */
+function useTitle() {
+  const matches = useMatches()
+  const title = [...matches]
+    .reverse()
+    .map((m) => (m.handle as { title?: string } | undefined)?.title)
+    .find(Boolean)
+  React.useEffect(() => {
+    if (title) document.title = `${title} · localoidc`
+  }, [title])
+}
+
 export function Root() {
   const { theme } = useTheme()
+  useTitle()
   return (
     <div className="flex h-svh flex-col">
       <AppHeader />

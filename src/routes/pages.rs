@@ -7,11 +7,11 @@ use crate::tenant::Tenant;
 
 /// The issuer's overview: its endpoints and the other issuers.
 pub async fn index(tenant: Tenant) -> Response {
-    app_page(&tenant)
+    app_page(&tenant, "Home")
 }
 
 /// Built-in redirect target, so logins can be tried without an app. The page shows the
 /// authorization response's parameters.
 pub async fn callback(tenant: Tenant) -> Response {
-    app_page(&tenant)
+    app_page(&tenant, "Callback")
 }
