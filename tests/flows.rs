@@ -551,9 +551,30 @@ async fn auto_login_mode() {
 #[tokio::test]
 async fn pages_render() {
     let app = app();
-    for uri in ["/", "/dev", "/p/google", "/p/github/dev", "/device", "/assets/app.js", "/assets/app.css"] {
-        assert_eq!(get(&app, uri).await.status, StatusCode::OK, "{uri}");
+    for uri in ["/", "/dev", "/dev/requests", "/callback", "/p/google", "/p/github/dev", "/device"] {
+        let page = get(&app, uri).await;
+        assert_eq!(page.status, StatusCode::OK, "{uri}");
+        assert!(page.body.contains(r#"<script type="application/json" id="lo-page">"#), "{uri}");
     }
+    // Each issuer's pages carry its prefix, for the app's links and API calls.
+    assert!(get(&app, "/p/google/dev").await.body.contains(r#""prefix":"/p/google""#));
+    let info = get(&app, "/p/google/dev/api/info").await.json();
+    assert_eq!((&info["issuer"], &info["preset"]["id"]), (&json!(format!("{ISS}/p/google")), &json!("google")));
+
+    // The app's files: hashed assets never change, and a missing file is a 404.
+    let page = get(&app, "/dev").await.body;
+    let script = page.split(r#"src="/assets/"#).nth(1).and_then(|rest| rest.split('"').next()).expect("script tag");
+    let res = get(&app, &format!("/assets/{script}")).await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert!(res.headers[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
+    assert_eq!(get(&app, "/favicon.svg").await.status, StatusCode::OK);
+    assert_eq!(get(&app, "/assets/nope.js").await.status, StatusCode::NOT_FOUND);
+
+    // The protocol's pages work without JavaScript too: their plain HTML version is a real form.
+    let page =
+        get(&app, &format!("/authorize?client_id=web&redirect_uri={}&response_type=code&scope=openid", enc(CB))).await;
+    assert!(page.body.contains("Sign in to web") && page.body.contains(r#"value="approve""#));
+    assert!(page.body.contains(r#""kind":"login""#));
 }
 
 #[tokio::test]
@@ -1152,11 +1173,11 @@ async fn clock_offset_shifts_issued_timestamps() {
     let res = get(&app, "/dev/api/token").await.json();
     assert!((iat(&res) - real + 3600).abs() <= 5, "{}", iat(&res));
 
-    // Pages warn while the clock is shifted.
-    let page = get(&app, "/dev").await.body;
-    assert!(page.contains("clock-banner") && page.contains("<b>-1h</b> behind"), "{page}");
+    // Pages warn while the clock is shifted: the web UI reads the offset from the info API.
+    let info = get(&app, "/dev/api/info").await.json();
+    assert_eq!((&info["clock"]["offset"], &info["clock"]["offset_text"]), (&json!(-3600), &json!("-1h")));
     set_clock(&app, json!({ "reset": true })).await;
-    assert!(!get(&app, "/dev").await.body.contains("clock-banner"));
+    assert_eq!(get(&app, "/dev/api/info").await.json()["clock"]["offset"], 0);
 
     // Bad requests leave the clock alone.
     for body in [
@@ -1344,13 +1365,13 @@ async fn faults_fail_matching_requests() {
     // Listing, the banner, removing (also under a provider issuer) and validation.
     let armed = get(&app, "/dev/api/faults").await.json();
     assert_eq!(armed.as_array().unwrap().iter().map(|f| f["id"].as_u64().unwrap()).collect::<Vec<_>>(), [always]);
-    assert!(get(&app, "/dev").await.body.contains("1 fault is armed"));
+    assert_eq!(get(&app, "/dev/api/info").await.json()["faults_armed"], 1);
     let res =
         send(&app, Request::delete(format!("/p/okta/dev/api/faults/{always}")).body(Body::empty()).unwrap()).await;
     assert_eq!(res.status, StatusCode::NO_CONTENT);
     let res = send(&app, Request::delete(format!("/dev/api/faults/{always}")).body(Body::empty()).unwrap()).await;
     assert_eq!(res.status, StatusCode::NOT_FOUND);
-    assert!(!get(&app, "/dev").await.body.contains("faults-banner"));
+    assert_eq!(get(&app, "/p/okta/dev/api/info").await.json()["faults_armed"], 0);
     arm(&app, json!({ "endpoint": "token", "always": true })).await;
     let res = send(&app, Request::delete("/dev/api/faults").body(Body::empty()).unwrap()).await;
     assert_eq!(res.status, StatusCode::NO_CONTENT);

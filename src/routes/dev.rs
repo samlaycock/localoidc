@@ -2,17 +2,16 @@
 
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use crate::error::{OAuthError, no_store};
-use crate::html::{data_script, esc, page};
+use crate::html::app_page;
 use crate::keys::decode_unverified;
 use crate::presets;
-use crate::routes::authorize::{current_session, editor_data};
 use crate::state::{AppState, Grant};
 use crate::tenant::Tenant;
 use crate::tokens::{self, IssueOpts};
@@ -290,28 +289,9 @@ pub async fn api_requests_clear(State(state): State<AppState>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+/// The request inspector's page.
 pub async fn requests_page(tenant: Tenant) -> Response {
-    let api = tenant.url("/dev/api/requests");
-    let body = format!(
-        r#"<section class="card">
-  <div class="eyebrow">Request inspector</div>
-  <h1>Requests</h1>
-  <p class="muted">The last {capacity} requests to every issuer, newest first. Click one for its parameters and, if it failed, why. Secrets are masked and tokens shortened. Tests can read the same list from <code>GET {api}</code>.</p>
-  <div class="req-toolbar">
-    <input id="req-client" placeholder="Filter by client_id" aria-label="Filter by client_id">
-    <label class="check"><input type="checkbox" id="req-errors"> Errors only</label>
-    <label class="check"><input type="checkbox" id="req-all"> Show discovery, JWKS and dev tools</label>
-    <span class="req-spacer"></span>
-    <button class="btn small" id="req-pause" type="button">Pause</button>
-    <button class="btn small ghost" id="req-clear" type="button">Clear</button>
-  </div>
-  <div id="lo-requests" data-api="{api}" data-issuer="{issuer}"></div>
-</section>"#,
-        capacity = crate::inspector::CAPACITY,
-        api = esc(&api),
-        issuer = esc(&tenant.issuer),
-    );
-    (StatusCode::OK, page(&tenant, "Requests", &body)).into_response()
+    app_page(&tenant)
 }
 
 /// Non-standard: the armed faults (see `crate::faults`).
@@ -350,7 +330,23 @@ pub async fn api_sessions(State(state): State<AppState>) -> Response {
         .store
         .entries::<crate::state::Session>(crate::store::Table::Sessions)
         .iter()
-        .map(|(sid, session, exp)| crate::backchannel::describe(sid, session, *exp))
+        .map(|(sid, session, exp)| {
+            let mut json = crate::backchannel::describe(sid, session, *exp);
+            // Who it is, for people reading the list, and which clients would be told it ended.
+            json["label"] = json!(
+                ["email", "name", "preferred_username", "login", "sub"]
+                    .iter()
+                    .find_map(|k| session.claims.get(*k).map(crate::util::value_to_string))
+            );
+            json["backchannel_clients"] = json!(
+                session
+                    .clients
+                    .iter()
+                    .filter(|c| state.client(c).and_then(|c| c.backchannel_logout_uri).is_some())
+                    .collect::<Vec<_>>()
+            );
+            json
+        })
         .collect();
     (no_store(), Json(sessions)).into_response()
 }
@@ -409,189 +405,72 @@ const FAULT_ERRORS: &[&str] = &[
     "interaction_required",
 ];
 
-/// Active sessions with "End session" buttons (the page script handles the clicks).
-fn session_list(state: &AppState) -> String {
-    let sessions = state.store.entries::<crate::state::Session>(crate::store::Table::Sessions);
-    if sessions.is_empty() {
-        return r#"<p class="muted small">No active sessions.</p>"#.into();
+/// Non-standard: what the web UI shows about this issuer: its endpoints, the other issuers, the
+/// clock and the armed faults (for the warning banners), and the token generator's defaults.
+pub async fn api_info(State(state): State<AppState>, tenant: Tenant) -> Response {
+    let u = |p: &str| tenant.url(p);
+    let mut endpoints = vec![
+        ("Discovery", u("/.well-known/openid-configuration")),
+        ("JWKS", u("/jwks")),
+        ("Authorization", u("/authorize")),
+        ("Token", u("/token")),
+        ("UserInfo", u("/userinfo")),
+        ("Introspection", u("/introspect")),
+        ("Revocation", u("/revoke")),
+        ("End session", u("/end_session")),
+        ("Device authorization", u("/device_authorization")),
+        ("Pushed auth requests", u("/par")),
+        ("Client registration", u("/register")),
+        ("Dev token API (non-standard)", u("/dev/api/token")),
+    ];
+    if let Some(p) = tenant.preset {
+        for (label, path) in &p.endpoints {
+            endpoints.push((label, u(path)));
+        }
     }
-    let items: String = sessions
-        .iter()
-        .map(|(sid, s, _)| {
-            let who = ["email", "name", "preferred_username", "login", "sub"]
-                .iter()
-                .find_map(|k| s.claims.get(*k).map(crate::util::value_to_string))
-                .unwrap_or_default();
-            let clients = if s.clients.is_empty() {
-                "no clients".to_string()
-            } else {
-                s.clients
-                    .iter()
-                    .map(|c| match state.client(c).and_then(|c| c.backchannel_logout_uri) {
-                        Some(_) => format!("<code>{}</code>", esc(c)),
-                        None => format!(
-                            r#"<code class="not-notified" title="No backchannel_logout_uri registered: won't be notified">{}</code>"#,
-                            esc(c)
-                        ),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            format!(
-                r#"<li><span><b>{who}</b> · {preset} · {clients}<br><small class="muted">sid <code>{sid_text}</code> · {issuer}</small></span><button class="btn small ghost" type="button" data-session="{sid_attr}">End session</button></li>"#,
-                who = esc(&who),
-                preset = esc(&s.preset),
-                sid_text = esc(sid),
-                issuer = esc(&s.issuer),
-                sid_attr = esc(sid),
-            )
-        })
-        .collect();
-    format!(r#"<ul class="fault-list session-list">{items}</ul>"#)
-}
-
-/// The armed faults as a list with remove buttons (the page script handles the clicks).
-fn fault_list(faults: &[crate::faults::Fault]) -> String {
-    if faults.is_empty() {
-        return r#"<p class="muted small">No faults armed.</p>"#.into();
+    let root = Tenant::new(&state.config.issuer, None);
+    let mut issuers = vec![json!({
+        "id": null,
+        "name": "Root issuer",
+        "description": "preset chosen at login",
+        "issuer": root.issuer,
+        "prefix": root.prefix,
+    })];
+    for p in presets::all() {
+        let t = Tenant::new(&state.config.issuer, Some(p));
+        issuers.push(json!({
+            "id": p.id,
+            "name": p.name,
+            "description": p.protocol,
+            "color": p.color,
+            "issuer": t.issuer,
+            "prefix": t.prefix,
+        }));
     }
-    let items: String = faults
-        .iter()
-        .map(|f| {
-            let endpoint = serde_json::to_value(f.endpoint).ok().map(|v| crate::util::value_to_string(&v)).unwrap_or_default();
-            let mut what = vec![match &f.error {
-                Some(e) if f.endpoint == crate::faults::Endpoint::Authorize => format!("<b>{}</b>", esc(e)),
-                Some(e) => format!("<b>{}</b> ({})", esc(e), f.status),
-                None => "no error".into(),
-            }];
-            if f.delay_ms > 0 {
-                what.push(format!("after {} ms", f.delay_ms));
-            }
-            for (label, value) in [("client", &f.client_id), ("grant", &f.grant_type), ("issuer", &f.issuer)] {
-                if let Some(v) = value {
-                    what.push(format!("{label} <code>{}</code>", esc(v)));
-                }
-            }
-            let left = match f.remaining {
-                Some(1) => "next request".to_string(),
-                Some(n) => format!("next {n} requests"),
-                None => "until removed".to_string(),
-            };
-            format!(
-                r#"<li><span><code>{endpoint}</code> → {what} · {left}</span><button class="btn small ghost" type="button" data-fault="{id}">Remove</button></li>"#,
-                what = what.join(" · "),
-                id = f.id,
-            )
-        })
-        .collect();
-    format!(r#"<ul class="fault-list">{items}</ul>"#)
-}
-
-pub async fn page_handler(State(state): State<AppState>, tenant: Tenant, headers: HeaderMap) -> Response {
     let preset = tenant.default_preset(&state.config);
-    let previous = current_session(&state, &tenant, &headers).map(|(_, s)| s);
-    let api = tenant.url("/dev/api/token");
-    let body = format!(
-        r#"<div class="layout dev">
-<section class="card editor-card">
-  <div class="eyebrow">Token generator</div>
-  <h1>Mint tokens for <span class="accent">{issuer}</span></h1>
-  <p class="muted">Generate access, ID and refresh tokens without running a login flow. Scripts and tests can use the same thing via <code>POST {api}</code>.</p>
-  <div class="opts" id="dev-options">
-    <label>client_id<input id="dev-client" value="localoidc-dev"></label>
-    <label>Access token audience<input id="dev-audience" placeholder="defaults to client_id"></label>
-    <label>Scope<input id="dev-scope" value="{scope}"></label>
-    <label>Lifetime (s)<input id="dev-ttl" type="number" value="{ttl}"></label>
-    <label>Nonce<input id="dev-nonce" placeholder="optional"></label>
-    <div class="checks">
-      <label class="check"><input type="checkbox" id="dev-idtoken" checked> ID token</label>
-      <label class="check"><input type="checkbox" id="dev-refresh" checked> Refresh token</label>
-    </div>
-  </div>
-  <div id="lo-editor"></div>
-  <div class="actions"><button class="btn primary" id="dev-generate" type="button">Generate tokens</button></div>
-</section>
-<section class="card result" id="dev-result" hidden></section>
-<section class="card" id="clock">
-  <div class="eyebrow">Clock</div>
-  <p class="muted">{clock_status} Shift it to expire refresh tokens, sessions and codes without waiting, or to simulate an identity provider whose clock is off. Scripts can use <code>POST {clock_api}</code>.</p>
-  <div class="actions clock-actions">
-    <input id="dev-clock-amount" value="1h" aria-label="Duration, e.g. 15m, 2h, 31d">
-    <button class="btn" id="dev-clock-advance" type="button">Move forward</button>
-    <button class="btn" id="dev-clock-back" type="button">Move back</button>
-    <button class="btn ghost" id="dev-clock-reset" type="button"{reset_disabled}>Reset to real time</button>
-  </div>
-</section>
-<section class="card" id="faults">
-  <div class="eyebrow">Faults</div>
-  <p class="muted">Make the next matching requests fail on purpose, or respond slowly, to test your app's error handling. Authorization errors are redirected back to the client like real ones. Scripts can use <code>POST {faults_api}</code>.</p>
-  {fault_list}
-  <div class="opts faults-form">
-    <label>Endpoint<select id="dev-fault-endpoint">{endpoint_options}</select></label>
-    <label>Error<input id="dev-fault-error" list="dev-fault-errors" placeholder="server_error"></label>
-    <label>Client <small>optional</small><input id="dev-fault-client" placeholder="any client"></label>
-    <label>Delay (ms)<input id="dev-fault-delay" type="number" min="0" max="{max_delay}" value="0"></label>
-    <label>Times<input id="dev-fault-count" type="number" min="1" value="1"></label>
-    <div class="checks"><label class="check"><input type="checkbox" id="dev-fault-always"> Until removed</label></div>
-  </div>
-  <datalist id="dev-fault-errors">{error_options}</datalist>
-  <div class="actions">
-    <button class="btn" id="dev-fault-add" type="button">Arm fault</button>
-    <button class="btn ghost" id="dev-fault-clear" type="button"{clear_disabled}>Remove all</button>
-  </div>
-</section>
-<section class="card" id="sessions">
-  <div class="eyebrow">Sessions</div>
-  <p class="muted">Browser sessions on every issuer. Ending one is like the user logging out elsewhere: clients that used it and registered a <code>backchannel_logout_uri</code> get a logout token (faded clients have none registered), and its refresh tokens stop working. Scripts can use <code>DELETE {sessions_api}/&lt;sid&gt;</code>.</p>
-  {session_list}
-</section>
-<section class="card">
-  <div class="eyebrow">Signing key</div>
-  <p class="muted">Tokens are signed with key <code id="dev-kid">{kid}</code>. Rotating creates a new key; the previous {kept} stay in the JWKS so tokens already issued keep verifying. Scripts can use <code>POST {rotate}</code>.</p>
-  <div class="actions"><button class="btn" id="dev-rotate" type="button">Rotate signing key</button></div>
-</section>
-</div>
-{data}"#,
-        issuer = esc(&tenant.issuer),
-        api = esc(&api),
-        scope = esc(preset.default_scope),
-        ttl = state.config.access_token_ttl,
-        kid = esc(&state.keys.kid()),
-        kept = crate::keys::RETIRED_KEYS_KEPT,
-        rotate = esc(&tenant.url("/dev/api/rotate-keys")),
-        clock_status = match state.clock().offset() {
-            0 => "The clock runs on real time.".to_string(),
-            o => format!(
-                "The clock is <b>{}</b> {} real time.",
-                crate::util::format_duration(o),
-                if o > 0 { "ahead of" } else { "behind" }
-            ),
-        },
-        clock_api = esc(&tenant.url("/dev/api/clock")),
-        reset_disabled = if state.clock().offset() == 0 { " disabled" } else { "" },
-        faults_api = esc(&tenant.url("/dev/api/faults")),
-        sessions_api = esc(&tenant.url("/dev/api/sessions")),
-        session_list = session_list(&state),
-        fault_list = fault_list(&state.faults.list()),
-        endpoint_options =
-            FAULT_ENDPOINTS.iter().map(|e| format!(r#"<option value="{e}">{e}</option>"#)).collect::<String>(),
-        error_options = FAULT_ERRORS.iter().map(|e| format!(r#"<option value="{e}">"#)).collect::<String>(),
-        max_delay = crate::faults::MAX_DELAY_MS,
-        clear_disabled = if state.faults.is_empty() { " disabled" } else { "" },
-        data = data_script(&editor_data(
-            &state,
-            &tenant,
-            "dev",
-            previous.as_ref(),
-            None,
-            json!({
-                "api": api,
-                "rotateApi": tenant.url("/dev/api/rotate-keys"),
-                "clockApi": tenant.url("/dev/api/clock"),
-                "faultsApi": tenant.url("/dev/api/faults"),
-                "sessionsApi": tenant.url("/dev/api/sessions"),
-            }),
-        )),
-    );
-    (StatusCode::OK, page(&tenant, "Token generator", &body)).into_response()
+    let body = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "issuer": tenant.issuer,
+        "prefix": tenant.prefix,
+        "preset": tenant.preset.map(|p| json!({ "id": p.id, "name": p.name, "color": p.color })),
+        "default_preset": preset.id,
+        "default_scope": preset.default_scope,
+        "access_token_ttl": state.config.access_token_ttl,
+        "clock": clock_json(&state),
+        "faults_armed": state.faults.list().len(),
+        "kid": state.keys.kid(),
+        "retired_keys_kept": crate::keys::RETIRED_KEYS_KEPT,
+        "endpoints": endpoints.iter().map(|(label, url)| json!({ "label": label, "url": url })).collect::<Vec<_>>(),
+        "issuers": issuers,
+        "fault_endpoints": FAULT_ENDPOINTS,
+        "fault_errors": FAULT_ERRORS,
+        "max_fault_delay_ms": crate::faults::MAX_DELAY_MS,
+        "requests_capacity": crate::inspector::CAPACITY,
+    });
+    (no_store(), Json(body)).into_response()
+}
+
+/// The token generator's page.
+pub async fn page_handler(tenant: Tenant) -> Response {
+    app_page(&tenant)
 }

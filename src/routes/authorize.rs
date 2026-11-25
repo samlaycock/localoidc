@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{OAuthError, no_store};
 use crate::faults;
-use crate::html::{data_script, error_page, esc, form_post, page};
+use crate::html::{BUTTON, PRIMARY_BUTTON, error_page, esc, form_post, shell, titled_card};
 use crate::keys::{decode_header_unverified, decode_unverified, verify_rs256_with_jwks};
 use crate::presets;
 use crate::state::{AppState, AuthRequest, CodeEntry, Grant, Session};
@@ -518,14 +518,6 @@ pub fn editor_data(
     data
 }
 
-fn kv(label: &str, value: &str) -> String {
-    format!("<dt>{}</dt><dd>{}</dd>", esc(label), value)
-}
-
-fn code(v: &str) -> String {
-    format!("<code>{}</code>", esc(v))
-}
-
 fn render_login(
     state: &AppState,
     tenant: &Tenant,
@@ -533,71 +525,45 @@ fn render_login(
     client_name: Option<&str>,
     previous: Option<Session>,
 ) -> Response {
-    let scopes: String =
-        req.scope.split_whitespace().map(|s| format!(r#"<span class="chip">{}</span>"#, esc(s))).collect();
-    let mut details = vec![
-        kv("client_id", &code(&req.client_id)),
-        kv("redirect_uri", &code(&req.redirect_uri)),
-        kv("response_type", &code(&req.response_type)),
-        kv("response_mode", &code(&req.response_mode)),
-        kv("scope", if scopes.is_empty() { "<em>none</em>" } else { &scopes }),
-    ];
-    if let Some(s) = &req.state {
-        details.push(kv("state", &code(s)));
-    }
-    if let Some(n) = &req.nonce {
-        details.push(kv("nonce", &code(n)));
-    }
-    details.push(kv(
-        "PKCE",
-        &match (&req.code_challenge, &req.code_challenge_method) {
-            (Some(_), Some(m)) => format!(r#"<span class="chip ok">{}</span>"#, esc(m)),
-            _ => r#"<span class="chip muted">not used</span>"#.into(),
-        },
-    ));
-    if !req.prompt.is_empty() {
-        details.push(kv("prompt", &code(&req.prompt.join(" "))));
-    }
-    if let Some(h) = &req.login_hint {
-        details.push(kv("login_hint", &code(h)));
-    }
-    if !req.audience.is_empty() {
-        details.push(kv("audience", &code(&req.audience.join(" "))));
-    }
-    details.push(kv("issuer", &code(&tenant.issuer)));
-
     let title = client_name.unwrap_or(&req.client_id);
-    let body = format!(
-        r#"<div class="layout">
-<aside class="card request">
-  <div class="eyebrow">Authorization request</div>
-  <h1>Sign in to <span class="accent">{title}</span></h1>
-  <div class="chips">{scopes}</div>
-  <details class="request-details"><summary>Request details</summary><dl class="kv">{details}</dl></details>
-</aside>
-<form class="card editor-card" method="post" action="{action}" id="lo-form">
-  <input type="hidden" name="req" value="{req_id}">
-  <input type="hidden" name="preset">
-  <input type="hidden" name="claims">
-  <input type="hidden" name="access_claims">
-  <div id="lo-editor"></div>
-  <div class="actions">
-    <button class="btn primary" type="submit" name="action" value="approve">Sign in</button>
-    <button class="btn ghost" type="submit" name="action" value="deny">Deny access</button>
-  </div>
-</form>
-</div>
-{data}"#,
-        title = esc(title),
-        scopes =
-            if scopes.is_empty() { r#"<span class="chip muted">no scopes</span>"#.to_string() } else { scopes.clone() },
-        details = details.join(""),
-        action = tenant.path("/login"),
+    let action = tenant.path("/login");
+    let view = json!({
+        "kind": "login",
+        "action": action,
+        "req": req.id,
+        "client": title,
+        "request": {
+            "client_id": req.client_id,
+            "redirect_uri": req.redirect_uri,
+            "response_type": req.response_type,
+            "response_mode": req.response_mode,
+            "scope": req.scope,
+            "state": req.state,
+            "nonce": req.nonce,
+            "code_challenge_method": req.code_challenge.as_ref().and(req.code_challenge_method.as_ref()),
+            "prompt": req.prompt,
+            "login_hint": req.login_hint,
+            "audience": req.audience,
+        },
+        "editor": editor_data(state, tenant, "login", previous.as_ref(), req.login_hint.as_deref(), json!({})),
+    });
+    // Without JavaScript, signing in uses the preset's default claims.
+    let form = format!(
+        r#"<form method="post" action="{action}" style="display:flex;gap:.5rem;margin-top:1rem">
+<input type="hidden" name="req" value="{req_id}">
+<button type="submit" name="action" value="approve" {PRIMARY_BUTTON}>Sign in</button>
+<button type="submit" name="action" value="deny" {BUTTON}>Deny access</button>
+</form>"#,
+        action = esc(&action),
         req_id = esc(&req.id),
-        data =
-            data_script(&editor_data(state, tenant, "login", previous.as_ref(), req.login_hint.as_deref(), json!({}))),
     );
-    page(tenant, "Sign in", &body).into_response()
+    let fallback = titled_card(
+        "Authorization request",
+        &format!("Sign in to {title}"),
+        &format!("Scope: {}. Signing in uses the default claims; the claims editor needs JavaScript.", req.scope),
+        &form,
+    );
+    shell(tenant, StatusCode::OK, "Sign in", view, &fallback)
 }
 
 /// (preset, identity claims, access-token-only claims) submitted from the claims editor.

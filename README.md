@@ -90,6 +90,7 @@ To make localoidc look like a specific provider, use that provider's issuer, for
 | Token API (non-standard) | `/dev/api/token` |
 | Provider presets (non-standard) | `/dev/api/presets` |
 | Declared users (non-standard) | `/dev/api/users` |
+| Issuer details for the web UI (non-standard) | `/dev/api/info` |
 | Signing key rotation (non-standard) | `POST /dev/api/rotate-keys` |
 | Clock offset (non-standard) | `/dev/api/clock` (GET/POST) |
 | Sessions (non-standard) | `/dev/api/sessions` (GET), `/dev/api/sessions/{sid}` (DELETE) |

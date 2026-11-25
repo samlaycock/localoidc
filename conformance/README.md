@@ -39,7 +39,7 @@ The suite keeps running afterwards. You can browse the detailed logs at https://
 
 ## How login is automated
 
-The suite drives localoidc's real login page with its headless browser, which follows the `browser` section of [`configs/*.json`](configs). It waits for the **Sign in** button and clicks it, so tokens carry the generic preset's default claims. If the page's JavaScript doesn't run in the headless browser, the empty claim fields make the server fall back to those same defaults.
+The suite drives localoidc's real login page with its headless browser, which follows the `browser` section of [`configs/*.json`](configs). It waits for the **Sign in** button and clicks it, so tokens carry the generic preset's default claims. The page works without JavaScript: until the web UI's app starts, or where it can't, the server's plain HTML version shows the same button, which signs in with those defaults.
 
 Some tests take a screenshot of an error page or the login page for manual review. In official certification a person checks those; here they show up as `REVIEW` results in the suite UI.
 
